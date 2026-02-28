@@ -39,6 +39,7 @@ import {
   useDroppable,
   type DragEndEvent,
   type DragStartEvent,
+  type DragOverEvent,
 } from '@dnd-kit/core';
 import { toast } from '@/components/ui';
 import { copyTextToClipboard } from '@/lib/clipboard';
@@ -1751,7 +1752,7 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
         if (isTextFile) {
           reader.readAsText(file);
         } else {
-          reader.readAsText(file); // Try text first, writeFile will handle binary
+          reader.readAsArrayBuffer(file);
         }
       });
 
@@ -1902,7 +1903,7 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
     setMoveConfirmDialog({ source: sourceNode, targetDir });
   }, []);
 
-  const handleDndDragOver = React.useCallback((event: { over: { data: { current: unknown } } | null }) => {
+  const handleDndDragOver = React.useCallback((event: DragOverEvent) => {
     const overData = event.over?.data?.current as { type?: string; path?: string } | undefined;
     if (overData?.type === 'directory' && overData.path) {
       setDndDropTargetPath(overData.path);
@@ -1984,29 +1985,34 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
         !isDescendantPath(activeDndNode.path, node.path)
       ));
 
-      const fileRowElement = (
-        <FileRow
-          node={node}
-          isExpanded={isExpanded}
-          isActive={isActive}
-          isMobile={isMobile}
-          status={!isDir ? getFileStatus(node.path) : undefined}
-          badge={isDir ? getFolderBadge(node.path) : undefined}
-          permissions={{ canRename, canCreateFile, canCreateFolder, canDelete, canReveal }}
-          contextMenuPath={contextMenuPath}
-          setContextMenuPath={setContextMenuPath}
-          onSelect={handleSelectFile}
-          onToggle={toggleDirectory}
-          onRevealPath={handleRevealPath}
-          onOpenDialog={handleOpenDialog}
-          onDragStart={handleFileDragStart}
-          isUploadDropTarget={nodeIsUploadDropTarget}
-          onUploadDropTargetEnter={handleDirectoryDragEnter}
-          onUploadDropTargetLeave={handleDirectoryDragLeave}
-          isDndDragging={nodeIsDndDragging}
-          isDndDropTarget={nodeIsDndDropTarget && isValidDropTarget}
-        />
+      // Shared props for FileRow - only isDndDropTarget varies based on context
+      const fileRowProps = {
+        node,
+        isExpanded,
+        isActive,
+        isMobile,
+        status: !isDir ? getFileStatus(node.path) : undefined,
+        badge: isDir ? getFolderBadge(node.path) : undefined,
+        permissions: { canRename, canCreateFile, canCreateFolder, canDelete, canReveal },
+        contextMenuPath,
+        setContextMenuPath,
+        onSelect: handleSelectFile,
+        onToggle: toggleDirectory,
+        onRevealPath: handleRevealPath,
+        onOpenDialog: handleOpenDialog,
+        onDragStart: handleFileDragStart,
+        isUploadDropTarget: nodeIsUploadDropTarget,
+        onUploadDropTargetEnter: handleDirectoryDragEnter,
+        onUploadDropTargetLeave: handleDirectoryDragLeave,
+        isDndDragging: nodeIsDndDragging,
+      };
+
+      // Helper to render FileRow with the appropriate isDndDropTarget value
+      const renderFileRow = (isDndDropTarget: boolean) => (
+        <FileRow {...fileRowProps} isDndDropTarget={isDndDropTarget} />
       );
+
+      const fileRowElement = renderFileRow(nodeIsDndDropTarget && isValidDropTarget);
 
       // Wrap all items in DraggableFileRow for internal DnD (if rename permission exists)
       // Directories also wrap in DroppableDirectoryRow to receive drops
@@ -2018,27 +2024,7 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
               <DroppableDirectoryRow dirPath={node.path}>
                 {(isOver, setNodeRef) => (
                   <div ref={setNodeRef}>
-                    <FileRow
-                      node={node}
-                      isExpanded={isExpanded}
-                      isActive={isActive}
-                      isMobile={isMobile}
-                      status={undefined}
-                      badge={getFolderBadge(node.path)}
-                      permissions={{ canRename, canCreateFile, canCreateFolder, canDelete, canReveal }}
-                      contextMenuPath={contextMenuPath}
-                      setContextMenuPath={setContextMenuPath}
-                      onSelect={handleSelectFile}
-                      onToggle={toggleDirectory}
-                      onRevealPath={handleRevealPath}
-                      onOpenDialog={handleOpenDialog}
-                      onDragStart={handleFileDragStart}
-                      isUploadDropTarget={nodeIsUploadDropTarget}
-                      onUploadDropTargetEnter={handleDirectoryDragEnter}
-                      onUploadDropTargetLeave={handleDirectoryDragLeave}
-                      isDndDragging={nodeIsDndDragging}
-                      isDndDropTarget={isOver}
-                    />
+                    {renderFileRow(isOver)}
                   </div>
                 )}
               </DroppableDirectoryRow>
