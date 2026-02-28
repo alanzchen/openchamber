@@ -73,7 +73,7 @@ import { useFileSearchStore } from '@/stores/useFileSearchStore';
 import { useDeviceInfo } from '@/lib/device';
 import { cn, getModifierLabel, hasModifier } from '@/lib/utils';
 import { getLanguageFromExtension, getImageMimeType, isImageFile, getMimeType } from '@/lib/toolHelpers';
-import { getFileTypeInfo, getBinaryFileWarning } from '@/lib/fileHelpers';
+import { getFileTypeInfo, getBinaryFileWarning, getFileCategory } from '@/lib/fileHelpers';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { EditorView } from '@codemirror/view';
 import type { Extension } from '@codemirror/state';
@@ -1334,6 +1334,8 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
 
     const selectedIsImage = isImageFile(node.path);
     const isSvg = node.path.toLowerCase().endsWith('.svg');
+    const fileCategory = getFileCategory(node.path);
+    const isMediaFile = fileCategory === 'pdf' || fileCategory === 'audio' || fileCategory === 'video';
 
     if (isMobile) {
       setShowMobilePageContent(true);
@@ -1349,6 +1351,15 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
 
     // Web: binary images should not be read as utf8.
     if (!runtime.isDesktop && selectedIsImage && !isSvg) {
+      setFileContent('');
+      setDraftContent('');
+      setFileLoading(false);
+      return;
+    }
+
+    // PDF, audio, and video files are displayed via the /api/fs/raw endpoint
+    // and should not be read as text content.
+    if (isMediaFile) {
       setFileContent('');
       setDraftContent('');
       setFileLoading(false);
@@ -2091,17 +2102,22 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
 
   const isSelectedImage = Boolean(selectedFile?.path && isImageFile(selectedFile.path));
   const isSelectedSvg = Boolean(selectedFile?.path && selectedFile.path.toLowerCase().endsWith('.svg'));
+  const selectedFileCategory = selectedFile?.path ? getFileCategory(selectedFile.path) : null;
+  const isSelectedPdf = selectedFileCategory === 'pdf';
+  const isSelectedAudio = selectedFileCategory === 'audio';
+  const isSelectedVideo = selectedFileCategory === 'video';
+  const isSelectedMedia = isSelectedPdf || isSelectedAudio || isSelectedVideo;
   const selectedFilePath = selectedFile?.path ?? '';
 
   const displaySelectedPath = React.useMemo(() => {
     return getDisplayPath(root, selectedFilePath);
   }, [selectedFilePath, root]);
 
-  const canCopy = Boolean(selectedFile && (!isSelectedImage || isSelectedSvg) && fileContent.length > 0);
+  const canCopy = Boolean(selectedFile && (!isSelectedImage || isSelectedSvg) && !isSelectedMedia && fileContent.length > 0);
   const canCopyPath = Boolean(selectedFile && displaySelectedPath.length > 0);
-  const canEdit = Boolean(selectedFile && !isSelectedImage && files.writeFile && fileContent.length <= MAX_VIEW_CHARS);
+  const canEdit = Boolean(selectedFile && !isSelectedImage && !isSelectedMedia && files.writeFile && fileContent.length <= MAX_VIEW_CHARS);
   const isMarkdown = Boolean(selectedFile?.path && isMarkdownFile(selectedFile.path));
-  const isTextFile = Boolean(selectedFile && !isSelectedImage);
+  const isTextFile = Boolean(selectedFile && !isSelectedImage && !isSelectedMedia);
   const canUseShikiFileView = isTextFile && !isMarkdown;
   const staticLanguageExtension = React.useMemo(
     () => (selectedFilePath ? languageByExtension(selectedFilePath) : null),
@@ -2240,6 +2256,11 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
       : (isSelectedSvg
         ? `data:${getImageMimeType(selectedFile.path)};utf8,${encodeURIComponent(fileContent)}`
         : `/api/fs/raw?path=${encodeURIComponent(selectedFile.path)}`))
+    : '';
+
+  // Media source URL for PDF, audio, and video files
+  const mediaSrc = selectedFile?.path && isSelectedMedia
+    ? `/api/fs/raw?path=${encodeURIComponent(selectedFile.path)}`
     : '';
 
 
@@ -2775,6 +2796,51 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
                 className="max-w-full max-h-[70vh] object-contain rounded-md border border-border/30 bg-primary/10"
               />
             </div>
+          ) : isSelectedPdf ? (
+            <div className="flex h-full w-full p-3">
+              <object
+                data={mediaSrc}
+                type="application/pdf"
+                className="w-full h-full rounded-md border border-border/30"
+              >
+                <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+                  <p className="mb-2">Unable to display PDF in this browser.</p>
+                  <a
+                    href={mediaSrc}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    Open PDF in new tab
+                  </a>
+                </div>
+              </object>
+            </div>
+          ) : isSelectedAudio ? (
+            <div className="flex h-full items-center justify-center p-3">
+              <div className="w-full max-w-md flex flex-col items-center gap-4">
+                <div className="text-sm text-muted-foreground">{selectedFile?.name}</div>
+                <audio
+                  src={mediaSrc}
+                  controls
+                  className="w-full"
+                  controlsList="nodownload"
+                >
+                  Your browser does not support the audio element.
+                </audio>
+              </div>
+            </div>
+          ) : isSelectedVideo ? (
+            <div className="flex h-full items-center justify-center p-3">
+              <video
+                src={mediaSrc}
+                controls
+                className="max-w-full max-h-[70vh] rounded-md border border-border/30 bg-black"
+                controlsList="nodownload"
+              >
+                Your browser does not support the video element.
+              </video>
+            </div>
           ) : selectedFile && isMarkdown && getMdViewMode() === 'preview' ? (
             <div className="h-full overflow-auto p-3">
               {fileContent.length > 500 * 1024 && (
@@ -3220,6 +3286,51 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
                 alt={selectedFile.name}
                 className="max-w-full max-h-full object-contain rounded-md border border-border/30 bg-primary/10"
               />
+            </div>
+          ) : isSelectedPdf ? (
+            <div className="flex h-full w-full p-4">
+              <object
+                data={mediaSrc}
+                type="application/pdf"
+                className="w-full h-full rounded-md border border-border/30"
+              >
+                <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+                  <p className="mb-2">Unable to display PDF in this browser.</p>
+                  <a
+                    href={mediaSrc}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    Open PDF in new tab
+                  </a>
+                </div>
+              </object>
+            </div>
+          ) : isSelectedAudio ? (
+            <div className="flex h-full items-center justify-center p-4">
+              <div className="w-full max-w-md flex flex-col items-center gap-4">
+                <div className="text-sm text-muted-foreground">{selectedFile.name}</div>
+                <audio
+                  src={mediaSrc}
+                  controls
+                  className="w-full"
+                  controlsList="nodownload"
+                >
+                  Your browser does not support the audio element.
+                </audio>
+              </div>
+            </div>
+          ) : isSelectedVideo ? (
+            <div className="flex h-full items-center justify-center p-4">
+              <video
+                src={mediaSrc}
+                controls
+                className="max-w-full max-h-full rounded-md border border-border/30 bg-black"
+                controlsList="nodownload"
+              >
+                Your browser does not support the video element.
+              </video>
             </div>
           ) : isMarkdown && getMdViewMode() === 'preview' ? (
             <div className="h-full overflow-auto p-4">

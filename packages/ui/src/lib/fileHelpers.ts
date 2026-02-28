@@ -360,27 +360,27 @@ export function getFileTypeInfo(filePath: string): FileTypeInfo {
       return {
         category,
         isBinary: true,
-        canDisplay: false, // PDF viewer not implemented yet
+        canDisplay: true,
         description: 'PDF document',
-        suggestedAction: 'PDF files cannot be displayed in the file viewer. Consider opening with an external PDF reader.',
+        suggestedAction: 'This file will be displayed in the PDF viewer.',
       };
 
     case 'audio':
       return {
         category,
         isBinary: true,
-        canDisplay: false,
+        canDisplay: true,
         description: 'Audio file',
-        suggestedAction: 'Audio files cannot be played in the file viewer. Consider opening with an external audio player.',
+        suggestedAction: 'This file will be played in the audio player.',
       };
 
     case 'video':
       return {
         category,
         isBinary: true,
-        canDisplay: false,
+        canDisplay: true,
         description: 'Video file',
-        suggestedAction: 'Video files cannot be played in the file viewer. Consider opening with an external video player.',
+        suggestedAction: 'This file will be played in the video player.',
       };
 
     case 'archive':
