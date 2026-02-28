@@ -25,7 +25,21 @@ import {
   RiEyeLine,
   RiFileCopyLine,
   RiUploadCloud2Line,
+  RiDragMove2Fill,
 } from '@remixicon/react';
+import {
+  DndContext,
+  DragOverlay,
+  closestCenter,
+  PointerSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  useDraggable,
+  useDroppable,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core';
 import { toast } from '@/components/ui';
 import { copyTextToClipboard } from '@/lib/clipboard';
 
@@ -233,10 +247,57 @@ interface FileRowProps {
   onRevealPath: (path: string) => void;
   onOpenDialog: (type: 'createFile' | 'createFolder' | 'rename' | 'delete', data: { path: string; name?: string; type?: 'file' | 'directory' }) => void;
   onDragStart?: (node: FileNode, event: React.DragEvent) => void;
-  isDropTarget?: boolean;
-  onDropTargetEnter?: (e: React.DragEvent, path: string) => void;
-  onDropTargetLeave?: (e: React.DragEvent) => void;
+  isUploadDropTarget?: boolean;
+  onUploadDropTargetEnter?: (e: React.DragEvent, path: string) => void;
+  onUploadDropTargetLeave?: (e: React.DragEvent) => void;
+  // Internal DnD props
+  isDndDragging?: boolean;
+  isDndDropTarget?: boolean;
 }
+
+// Draggable wrapper for internal DnD
+const DraggableFileRow: React.FC<{
+  node: FileNode;
+  children: React.ReactNode;
+}> = ({ node, children }) => {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `file-drag:${node.path}`,
+    data: { type: 'file-move', node },
+  });
+
+  const handlePointerDown = React.useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (listeners?.onPointerDown) {
+        (listeners.onPointerDown as (event: React.PointerEvent) => void)(e);
+      }
+    },
+    [listeners],
+  );
+
+  return (
+    <div
+      ref={setNodeRef}
+      {...attributes}
+      onPointerDown={handlePointerDown}
+      className={isDragging ? 'opacity-30' : undefined}
+    >
+      {children}
+    </div>
+  );
+};
+
+// Droppable wrapper for directories
+const DroppableDirectoryRow: React.FC<{
+  dirPath: string;
+  children: (isOver: boolean, setNodeRef: (el: HTMLElement | null) => void) => React.ReactNode;
+}> = ({ dirPath, children }) => {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `dir-drop:${dirPath}`,
+    data: { type: 'directory', path: dirPath },
+  });
+
+  return <>{children(isOver, setNodeRef)}</>;
+};
 
 const FileRow: React.FC<FileRowProps> = ({
   node,
@@ -253,13 +314,15 @@ const FileRow: React.FC<FileRowProps> = ({
   onRevealPath,
   onOpenDialog,
   onDragStart,
-  isDropTarget,
-  onDropTargetEnter,
-  onDropTargetLeave,
+  isUploadDropTarget,
+  onUploadDropTargetEnter,
+  onUploadDropTargetLeave,
+  isDndDragging,
+  isDndDropTarget,
 }) => {
   const isDir = node.type === 'directory';
   const { canRename, canCreateFile, canCreateFolder, canDelete, canReveal } = permissions;
-  const [isDragging, setIsDragging] = React.useState(false);
+  const [isNativeDragging, setIsNativeDragging] = React.useState(false);
 
   const handleContextMenu = React.useCallback((event?: React.MouseEvent) => {
     if (!canRename && !canCreateFile && !canCreateFolder && !canDelete && !canReveal) {
@@ -282,35 +345,36 @@ const FileRow: React.FC<FileRowProps> = ({
     setContextMenuPath(node.path);
   }, [node.path, setContextMenuPath]);
 
-  const handleDragStart = React.useCallback((event: React.DragEvent) => {
+  // Native drag for file export (drag-out to desktop)
+  const handleNativeDragStart = React.useCallback((event: React.DragEvent) => {
+    // Only enable native drag for files on desktop (for drag-out feature)
     if (isDir) {
-      // Prevent dragging directories for now
       event.preventDefault();
       return;
     }
-    setIsDragging(true);
+    setIsNativeDragging(true);
     onDragStart?.(node, event);
   }, [isDir, node, onDragStart]);
 
-  const handleDragEnd = React.useCallback(() => {
-    setIsDragging(false);
+  const handleNativeDragEnd = React.useCallback(() => {
+    setIsNativeDragging(false);
   }, []);
 
-  // Files are draggable, directories are not (for now)
-  const isDraggable = !isDir && Boolean(onDragStart);
-
-  // Directories can be drop targets
-  const handleDropTargetDragEnter = React.useCallback((e: React.DragEvent) => {
-    if (isDir && onDropTargetEnter) {
-      onDropTargetEnter(e, node.path);
+  // Upload drop target handlers (for external file drops)
+  const handleUploadDragEnter = React.useCallback((e: React.DragEvent) => {
+    if (isDir && onUploadDropTargetEnter) {
+      onUploadDropTargetEnter(e, node.path);
     }
-  }, [isDir, node.path, onDropTargetEnter]);
+  }, [isDir, node.path, onUploadDropTargetEnter]);
 
-  const handleDropTargetDragLeave = React.useCallback((e: React.DragEvent) => {
-    if (isDir && onDropTargetLeave) {
-      onDropTargetLeave(e);
+  const handleUploadDragLeave = React.useCallback((e: React.DragEvent) => {
+    if (isDir && onUploadDropTargetLeave) {
+      onUploadDropTargetLeave(e);
     }
-  }, [isDir, onDropTargetLeave]);
+  }, [isDir, onUploadDropTargetLeave]);
+
+  const isDragging = isDndDragging || isNativeDragging;
+  const isDropTarget = isUploadDropTarget || isDndDropTarget;
 
   return (
     <div
@@ -319,22 +383,26 @@ const FileRow: React.FC<FileRowProps> = ({
         isDragging && "opacity-50"
       )}
       onContextMenu={!isMobile ? handleContextMenu : undefined}
-      draggable={isDraggable}
-      onDragStart={isDraggable ? handleDragStart : undefined}
-      onDragEnd={isDraggable ? handleDragEnd : undefined}
-      onDragEnter={isDir ? handleDropTargetDragEnter : undefined}
-      onDragLeave={isDir ? handleDropTargetDragLeave : undefined}
+      // Native drag for desktop file export only (not for internal moves)
+      draggable={!isDir && Boolean(onDragStart) && !isMobile}
+      onDragStart={!isDir && !isMobile ? handleNativeDragStart : undefined}
+      onDragEnd={!isDir && !isMobile ? handleNativeDragEnd : undefined}
+      // Upload drop target (for external files)
+      onDragEnter={isDir ? handleUploadDragEnter : undefined}
+      onDragLeave={isDir ? handleUploadDragLeave : undefined}
     >
       <button
         type="button"
         onClick={handleInteraction}
         onContextMenu={!isMobile ? handleContextMenu : undefined}
         className={cn(
-          'flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-foreground transition-colors pr-8 select-none',
+          'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-foreground transition-colors pr-8 select-none',
           isActive ? 'bg-interactive-selection/70' : 'hover:bg-interactive-hover/40',
-          isDraggable && 'cursor-grab',
+          !isDir && !isMobile && 'cursor-grab',
           isDragging && 'cursor-grabbing',
-          isDropTarget && 'ring-2 ring-primary ring-offset-2 ring-offset-background bg-primary/10'
+          isDropTarget && 'ring-2 ring-primary ring-offset-2 ring-offset-background bg-primary/10',
+          // Ensure touch targets meet minimum size (36px)
+          isMobile && 'min-h-9'
         )}
       >
         {isDir ? (
@@ -371,9 +439,9 @@ const FileRow: React.FC<FileRowProps> = ({
             onOpenChange={(open) => setContextMenuPath(open ? node.path : null)}
           >
             <DropdownMenuTrigger asChild>
-              <Button 
-                variant="ghost" 
-                size="icon" 
+              <Button
+                variant="ghost"
+                size="icon"
                 className="h-6 w-6"
                 onClick={handleMenuButtonClick}
               >
@@ -435,6 +503,14 @@ const FileRow: React.FC<FileRowProps> = ({
       )}
     </div>
   );
+};
+
+// Helper to check if dropping source into target would create a cycle
+const isDescendantPath = (sourcePath: string, targetPath: string): boolean => {
+  const normalizedSource = normalizePath(sourcePath);
+  const normalizedTarget = normalizePath(targetPath);
+  // Check if target is the source itself or a descendant of source
+  return normalizedTarget === normalizedSource || normalizedTarget.startsWith(`${normalizedSource}/`);
 };
 
 interface FilesViewProps {
@@ -598,6 +674,31 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
   const [dropTargetPath, setDropTargetPath] = React.useState<string | null>(null);
   const [isUploading, setIsUploading] = React.useState(false);
   const dragCounterRef = React.useRef(0);
+
+  // Internal DnD state (for moving files/folders)
+  const [activeDndNode, setActiveDndNode] = React.useState<FileNode | null>(null);
+  const [dndDropTargetPath, setDndDropTargetPath] = React.useState<string | null>(null);
+  const [moveConfirmDialog, setMoveConfirmDialog] = React.useState<{
+    source: FileNode;
+    targetDir: string;
+  } | null>(null);
+  const [isMoving, setIsMoving] = React.useState(false);
+
+  // Configure DnD sensors - different for desktop vs mobile
+  const pointerSensor = useSensor(PointerSensor, {
+    activationConstraint: {
+      distance: 8, // Require 8px of movement before drag starts
+    },
+  });
+  const touchSensor = useSensor(TouchSensor, {
+    activationConstraint: {
+      delay: 400, // Long press delay
+      tolerance: 5, // Allow slight movement during delay
+    },
+  });
+  const dndSensors = useSensors(
+    isMobile ? touchSensor : pointerSensor
+  );
 
   // Session/config for sending comments
   const setMainTabGuard = useUIStore((state) => state.setMainTabGuard);
@@ -1753,6 +1854,118 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
     }
   }, [isDraggingFiles, currentDirectory]);
 
+  // Internal DnD handlers (for moving files/folders within the tree)
+  const handleDndDragStart = React.useCallback((event: DragStartEvent) => {
+    const data = event.active.data.current as { type?: string; node?: FileNode } | undefined;
+    if (data?.type === 'file-move' && data.node) {
+      setActiveDndNode(data.node);
+      // Haptic feedback on mobile
+      if (isMobile && typeof navigator !== 'undefined' && navigator.vibrate) {
+        try {
+          navigator.vibrate(15);
+        } catch {
+          // Ignore vibration errors
+        }
+      }
+    }
+  }, [isMobile]);
+
+  const handleDndDragEnd = React.useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    setActiveDndNode(null);
+    setDndDropTargetPath(null);
+
+    if (!over) return;
+
+    const activeData = active.data.current as { type?: string; node?: FileNode } | undefined;
+    const overData = over.data.current as { type?: string; path?: string } | undefined;
+
+    if (activeData?.type !== 'file-move' || !activeData.node) return;
+    if (overData?.type !== 'directory' || !overData.path) return;
+
+    const sourceNode = activeData.node;
+    const targetDir = overData.path;
+
+    // Prevent dropping a folder into itself or its descendants
+    if (sourceNode.type === 'directory' && isDescendantPath(sourceNode.path, targetDir)) {
+      toast.error('Cannot move a folder into itself');
+      return;
+    }
+
+    // Prevent moving to the same directory
+    const sourceParent = sourceNode.path.split('/').slice(0, -1).join('/');
+    if (normalizePath(sourceParent) === normalizePath(targetDir)) {
+      return; // No-op, same directory
+    }
+
+    // Show confirmation dialog
+    setMoveConfirmDialog({ source: sourceNode, targetDir });
+  }, []);
+
+  const handleDndDragOver = React.useCallback((event: { over: { data: { current: unknown } } | null }) => {
+    const overData = event.over?.data?.current as { type?: string; path?: string } | undefined;
+    if (overData?.type === 'directory' && overData.path) {
+      setDndDropTargetPath(overData.path);
+    } else {
+      setDndDropTargetPath(null);
+    }
+  }, []);
+
+  // Perform the actual move operation
+  const performMove = React.useCallback(async (source: FileNode, targetDir: string) => {
+    if (!files.rename) {
+      toast.error('Move operation not supported');
+      return;
+    }
+
+    setIsMoving(true);
+    const newPath = normalizePath(`${targetDir}/${source.name}`);
+
+    try {
+      const result = await files.rename(source.path, newPath);
+      if (result.success) {
+        toast.success(`Moved ${source.name} to ${targetDir.split('/').pop() || 'target folder'}`);
+        await refreshRoot();
+
+        // Update open paths if the moved item was open
+        if (root) {
+          removeOpenPathsByPrefix(root, source.path);
+        }
+
+        // Clear selection if the selected file was moved
+        if (selectedFile?.path === source.path || selectedFile?.path.startsWith(`${source.path}/`)) {
+          if (root) {
+            setSelectedPath(root, null);
+          }
+          setFileContent('');
+          setFileError(null);
+          setDesktopImageSrc('');
+          setLoadedFilePath(null);
+          if (isMobile) {
+            setShowMobilePageContent(false);
+          }
+        }
+      } else {
+        toast.error('Move failed');
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Move failed');
+    } finally {
+      setIsMoving(false);
+      setMoveConfirmDialog(null);
+    }
+  }, [files, refreshRoot, removeOpenPathsByPrefix, root, selectedFile?.path, setSelectedPath, isMobile]);
+
+  const handleConfirmMove = React.useCallback(() => {
+    if (moveConfirmDialog) {
+      void performMove(moveConfirmDialog.source, moveConfirmDialog.targetDir);
+    }
+  }, [moveConfirmDialog, performMove]);
+
+  const handleCancelMove = React.useCallback(() => {
+    setMoveConfirmDialog(null);
+  }, []);
+
   function renderTree(dirPath: string, depth: number): React.ReactNode {
     const nodes = childrenByDir[dirPath] ?? [];
 
@@ -1761,7 +1974,86 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
       const isExpanded = isDir && expandedPaths.includes(node.path);
       const isActive = selectedFile?.path === node.path;
       const isLast = index === nodes.length - 1;
-      const nodeIsDropTarget = isDir && isDraggingFiles && dropTargetPath === node.path;
+      const nodeIsUploadDropTarget = isDir && isDraggingFiles && dropTargetPath === node.path;
+      const nodeIsDndDropTarget = isDir && dndDropTargetPath === node.path;
+      const nodeIsDndDragging = activeDndNode?.path === node.path;
+
+      // Check if this directory is a valid drop target (not the source or its descendant)
+      const isValidDropTarget = isDir && (!activeDndNode || (
+        activeDndNode.path !== node.path &&
+        !isDescendantPath(activeDndNode.path, node.path)
+      ));
+
+      const fileRowElement = (
+        <FileRow
+          node={node}
+          isExpanded={isExpanded}
+          isActive={isActive}
+          isMobile={isMobile}
+          status={!isDir ? getFileStatus(node.path) : undefined}
+          badge={isDir ? getFolderBadge(node.path) : undefined}
+          permissions={{ canRename, canCreateFile, canCreateFolder, canDelete, canReveal }}
+          contextMenuPath={contextMenuPath}
+          setContextMenuPath={setContextMenuPath}
+          onSelect={handleSelectFile}
+          onToggle={toggleDirectory}
+          onRevealPath={handleRevealPath}
+          onOpenDialog={handleOpenDialog}
+          onDragStart={handleFileDragStart}
+          isUploadDropTarget={nodeIsUploadDropTarget}
+          onUploadDropTargetEnter={handleDirectoryDragEnter}
+          onUploadDropTargetLeave={handleDirectoryDragLeave}
+          isDndDragging={nodeIsDndDragging}
+          isDndDropTarget={nodeIsDndDropTarget && isValidDropTarget}
+        />
+      );
+
+      // Wrap all items in DraggableFileRow for internal DnD (if rename permission exists)
+      // Directories also wrap in DroppableDirectoryRow to receive drops
+      let wrappedRow: React.ReactNode;
+      if (canRename) {
+        if (isDir && isValidDropTarget) {
+          wrappedRow = (
+            <DraggableFileRow node={node}>
+              <DroppableDirectoryRow dirPath={node.path}>
+                {(isOver, setNodeRef) => (
+                  <div ref={setNodeRef}>
+                    <FileRow
+                      node={node}
+                      isExpanded={isExpanded}
+                      isActive={isActive}
+                      isMobile={isMobile}
+                      status={undefined}
+                      badge={getFolderBadge(node.path)}
+                      permissions={{ canRename, canCreateFile, canCreateFolder, canDelete, canReveal }}
+                      contextMenuPath={contextMenuPath}
+                      setContextMenuPath={setContextMenuPath}
+                      onSelect={handleSelectFile}
+                      onToggle={toggleDirectory}
+                      onRevealPath={handleRevealPath}
+                      onOpenDialog={handleOpenDialog}
+                      onDragStart={handleFileDragStart}
+                      isUploadDropTarget={nodeIsUploadDropTarget}
+                      onUploadDropTargetEnter={handleDirectoryDragEnter}
+                      onUploadDropTargetLeave={handleDirectoryDragLeave}
+                      isDndDragging={nodeIsDndDragging}
+                      isDndDropTarget={isOver}
+                    />
+                  </div>
+                )}
+              </DroppableDirectoryRow>
+            </DraggableFileRow>
+          );
+        } else {
+          wrappedRow = (
+            <DraggableFileRow node={node}>
+              {fileRowElement}
+            </DraggableFileRow>
+          );
+        }
+      } else {
+        wrappedRow = fileRowElement;
+      }
 
       return (
         <li key={node.path} className="relative">
@@ -1773,25 +2065,7 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
               )}
             </>
           )}
-          <FileRow
-            node={node}
-            isExpanded={isExpanded}
-            isActive={isActive}
-            isMobile={isMobile}
-            status={!isDir ? getFileStatus(node.path) : undefined}
-            badge={isDir ? getFolderBadge(node.path) : undefined}
-            permissions={{ canRename, canCreateFile, canCreateFolder, canDelete, canReveal }}
-            contextMenuPath={contextMenuPath}
-            setContextMenuPath={setContextMenuPath}
-            onSelect={handleSelectFile}
-            onToggle={toggleDirectory}
-            onRevealPath={handleRevealPath}
-            onOpenDialog={handleOpenDialog}
-            onDragStart={handleFileDragStart}
-            isDropTarget={nodeIsDropTarget}
-            onDropTargetEnter={handleDirectoryDragEnter}
-            onDropTargetLeave={handleDirectoryDragLeave}
-          />
+          {wrappedRow}
           {isDir && isExpanded && (
             <ul className="flex flex-col gap-1 ml-3 pl-3 border-l border-border/40 relative">
               {renderTree(node.path, depth + 1)}
@@ -2663,43 +2937,67 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
       </div>
 
       <ScrollableOverlay outerClassName="flex-1 min-h-0" className={cn("py-2", isMobile ? "px-3" : "px-2")}>
-        <ul className="flex flex-col">
-          {searching ? (
-            <li className="flex items-center gap-1.5 px-2 py-1 typography-meta text-muted-foreground">
-              <RiLoader4Line className="h-4 w-4 animate-spin" />
-              Searching…
-            </li>
-          ) : searchResults.length > 0 ? (
-            searchResults.map((node) => {
-              const isActive = selectedFile?.path === node.path;
-              return (
-                <li key={node.path}>
-                  <button
-                    type="button"
-                    onClick={() => void handleSelectFile(node)}
-                    className={cn(
-                      'flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-foreground transition-colors',
-                      isActive ? 'bg-interactive-selection/70' : 'hover:bg-interactive-hover/40'
-                    )}
-                  >
-                    {getFileIcon(node.path, node.extension)}
-                    <span
-                      className="min-w-0 flex-1 truncate typography-meta"
-                      style={{ direction: 'rtl', textAlign: 'left' }}
-                      title={node.path}
+        <DndContext
+          sensors={dndSensors}
+          collisionDetection={closestCenter}
+          onDragStart={handleDndDragStart}
+          onDragOver={handleDndDragOver}
+          onDragEnd={handleDndDragEnd}
+        >
+          <ul className="flex flex-col">
+            {searching ? (
+              <li className="flex items-center gap-1.5 px-2 py-1 typography-meta text-muted-foreground">
+                <RiLoader4Line className="h-4 w-4 animate-spin" />
+                Searching…
+              </li>
+            ) : searchResults.length > 0 ? (
+              searchResults.map((node) => {
+                const isActive = selectedFile?.path === node.path;
+                return (
+                  <li key={node.path}>
+                    <button
+                      type="button"
+                      onClick={() => void handleSelectFile(node)}
+                      className={cn(
+                        'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-foreground transition-colors',
+                        isActive ? 'bg-interactive-selection/70' : 'hover:bg-interactive-hover/40',
+                        isMobile && 'min-h-9'
+                      )}
                     >
-                      {node.relativePath ?? node.path}
-                    </span>
-                  </button>
-                </li>
-              );
-            })
-          ) : hasTree ? (
-            renderTree(root, 0)
-          ) : (
-            <li className="px-2 py-1 typography-meta text-muted-foreground">Loading…</li>
-          )}
-        </ul>
+                      {getFileIcon(node.path, node.extension)}
+                      <span
+                        className="min-w-0 flex-1 truncate typography-meta"
+                        style={{ direction: 'rtl', textAlign: 'left' }}
+                        title={node.path}
+                      >
+                        {node.relativePath ?? node.path}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })
+            ) : hasTree ? (
+              renderTree(root, 0)
+            ) : (
+              <li className="px-2 py-1 typography-meta text-muted-foreground">Loading…</li>
+            )}
+          </ul>
+          <DragOverlay>
+            {activeDndNode && (
+              <div className="flex items-center gap-1.5 rounded-md border border-primary bg-background px-2 py-1.5 shadow-lg">
+                <RiDragMove2Fill className="h-4 w-4 text-primary" />
+                {activeDndNode.type === 'directory' ? (
+                  <RiFolder3Fill className="h-4 w-4 flex-shrink-0 text-primary/60" />
+                ) : (
+                  getFileIcon(activeDndNode.path, activeDndNode.extension)
+                )}
+                <span className="typography-meta text-foreground truncate max-w-[200px]">
+                  {activeDndNode.name}
+                </span>
+              </div>
+            )}
+          </DragOverlay>
+        </DndContext>
       </ScrollableOverlay>
     </section>
   );
@@ -2926,9 +3224,33 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
     </div>
   );
 
+  // Move confirmation dialog
+  const moveConfirmDialogElement = (
+    <Dialog open={!!moveConfirmDialog} onOpenChange={(open) => !open && handleCancelMove()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Move {moveConfirmDialog?.source.type === 'directory' ? 'Folder' : 'File'}</DialogTitle>
+          <DialogDescription>
+            Move <strong>{moveConfirmDialog?.source.name}</strong> to{' '}
+            <strong>{moveConfirmDialog?.targetDir.split('/').pop() || 'target folder'}</strong>?
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={handleCancelMove} disabled={isMoving}>
+            Cancel
+          </Button>
+          <Button onClick={handleConfirmMove} disabled={isMoving}>
+            {isMoving ? <RiLoader4Line className="animate-spin" /> : 'Move'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
   return (
     <div className="flex h-full min-h-0 overflow-hidden bg-background relative">
       {renderDialogs()}
+      {moveConfirmDialogElement}
       {fullscreenViewer}
       {isMobile ? (
         showMobilePageContent ? (
