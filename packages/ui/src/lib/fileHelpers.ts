@@ -345,7 +345,7 @@ export function getFileTypeInfo(filePath: string): FileTypeInfo {
         description: 'Text file',
       };
 
-    case 'image':
+    case 'image': {
       // SVG is text-based and can be viewed/edited
       const isSvg = ext === 'svg';
       return {
@@ -355,6 +355,7 @@ export function getFileTypeInfo(filePath: string): FileTypeInfo {
         description: isSvg ? 'SVG image (vector)' : 'Image file',
         suggestedAction: 'This file will be displayed in the image viewer.',
       };
+    }
 
     case 'pdf':
       return {
