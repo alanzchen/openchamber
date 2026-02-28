@@ -681,6 +681,72 @@ export function getImageMimeType(filePath: string): string {
   return mimeMap[ext || ''] || 'image/png';
 }
 
+/**
+ * Get MIME type for any file based on extension.
+ * Falls back to 'application/octet-stream' for unknown types.
+ */
+export function getMimeType(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase();
+  const mimeMap: Record<string, string> = {
+    // Images
+    'png': 'image/png',
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'gif': 'image/gif',
+    'svg': 'image/svg+xml',
+    'webp': 'image/webp',
+    'ico': 'image/x-icon',
+    'bmp': 'image/bmp',
+    'avif': 'image/avif',
+    // Text/Code
+    'txt': 'text/plain',
+    'html': 'text/html',
+    'htm': 'text/html',
+    'css': 'text/css',
+    'js': 'text/javascript',
+    'mjs': 'text/javascript',
+    'ts': 'text/typescript',
+    'tsx': 'text/typescript',
+    'jsx': 'text/javascript',
+    'json': 'application/json',
+    'xml': 'application/xml',
+    'md': 'text/markdown',
+    'markdown': 'text/markdown',
+    'yaml': 'text/yaml',
+    'yml': 'text/yaml',
+    'csv': 'text/csv',
+    // Documents
+    'pdf': 'application/pdf',
+    'doc': 'application/msword',
+    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'xls': 'application/vnd.ms-excel',
+    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'ppt': 'application/vnd.ms-powerpoint',
+    'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    // Archives
+    'zip': 'application/zip',
+    'tar': 'application/x-tar',
+    'gz': 'application/gzip',
+    'rar': 'application/vnd.rar',
+    '7z': 'application/x-7z-compressed',
+    // Media
+    'mp3': 'audio/mpeg',
+    'wav': 'audio/wav',
+    'mp4': 'video/mp4',
+    'webm': 'video/webm',
+    'ogg': 'audio/ogg',
+    // Fonts
+    'woff': 'font/woff',
+    'woff2': 'font/woff2',
+    'ttf': 'font/ttf',
+    'otf': 'font/otf',
+    'eot': 'application/vnd.ms-fontobject',
+    // Data
+    'wasm': 'application/wasm',
+  };
+  return mimeMap[ext || ''] || 'application/octet-stream';
+}
+
 export function formatToolInput(input: Record<string, unknown>, toolName: string): string {
   if (!input) return '';
 
