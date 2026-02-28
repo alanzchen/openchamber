@@ -73,6 +73,7 @@ import { useFileSearchStore } from '@/stores/useFileSearchStore';
 import { useDeviceInfo } from '@/lib/device';
 import { cn, getModifierLabel, hasModifier } from '@/lib/utils';
 import { getLanguageFromExtension, getImageMimeType, isImageFile, getMimeType } from '@/lib/toolHelpers';
+import { getFileTypeInfo, getBinaryFileWarning } from '@/lib/fileHelpers';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { EditorView } from '@codemirror/view';
 import type { Extension } from '@codemirror/state';
@@ -684,6 +685,13 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
     targetDir: string;
   } | null>(null);
   const [isMoving, setIsMoving] = React.useState(false);
+
+  // Binary file warning dialog state
+  const [binaryWarningDialog, setBinaryWarningDialog] = React.useState<{
+    node: FileNode;
+    title: string;
+    message: string;
+  } | null>(null);
 
   // Configure DnD sensors - different for desktop vs mobile
   const pointerSensor = useSensor(PointerSensor, {
@@ -1421,13 +1429,32 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
     return filesList[index + 1] ?? filesList[index - 1] ?? null;
   }, []);
 
-  const handleSelectFile = React.useCallback(async (node: FileNode) => {
+  const handleSelectFile = React.useCallback(async (node: FileNode, skipBinaryCheck = false) => {
     if (skipDirtyOnceRef.current) {
       skipDirtyOnceRef.current = false;
     } else if (isDirty) {
       setConfirmDiscardOpen(true);
       pendingSelectFileRef.current = node;
       return;
+    }
+
+    // Check if this is a binary file that cannot be displayed
+    // Skip check for images (they have a viewer) and SVGs (text-based)
+    if (!skipBinaryCheck && node.type === 'file') {
+      const fileInfo = getFileTypeInfo(node.path);
+      const selectedIsImage = isImageFile(node.path);
+
+      // Only warn for binary files that cannot be displayed
+      // Images can be displayed, so don't warn about them
+      if (fileInfo.isBinary && !fileInfo.canDisplay && !selectedIsImage) {
+        const warning = getBinaryFileWarning(node.path);
+        setBinaryWarningDialog({
+          node,
+          title: warning.title,
+          message: warning.message,
+        });
+        return;
+      }
     }
 
     if (root) {
@@ -2383,6 +2410,42 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
               Save changes
             </Button>
             <Button variant="destructive" onClick={discardAndContinue}>Discard</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Binary file warning dialog */}
+      <Dialog open={binaryWarningDialog !== null} onOpenChange={(open) => {
+        if (!open) {
+          setBinaryWarningDialog(null);
+        }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{binaryWarningDialog?.title || 'Binary File'}</DialogTitle>
+            <DialogDescription className="whitespace-pre-wrap">
+              {binaryWarningDialog?.message || 'This file cannot be displayed.'}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setBinaryWarningDialog(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="default"
+              onClick={() => {
+                if (binaryWarningDialog?.node) {
+                  // Proceed with opening - skip the binary check this time
+                  void handleSelectFile(binaryWarningDialog.node, true);
+                }
+                setBinaryWarningDialog(null);
+              }}
+            >
+              Open Anyway
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
