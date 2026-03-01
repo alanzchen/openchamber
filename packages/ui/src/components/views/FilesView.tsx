@@ -39,6 +39,7 @@ import {
   useDroppable,
   type DragEndEvent,
   type DragStartEvent,
+  type DragOverEvent,
 } from '@dnd-kit/core';
 import { toast } from '@/components/ui';
 import { copyTextToClipboard } from '@/lib/clipboard';
@@ -55,6 +56,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { CodeMirrorEditor } from '@/components/ui/CodeMirrorEditor';
 import { PreviewToggleButton } from './PreviewToggleButton';
+import { MediaViewer } from './MediaViewer';
 import { SimpleMarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { languageByExtension, loadLanguageByExtension } from '@/lib/codemirror/languageByExtension';
 import { createFlexokiCodeMirrorTheme } from '@/lib/codemirror/flexokiTheme';
@@ -72,6 +74,7 @@ import { useFileSearchStore } from '@/stores/useFileSearchStore';
 import { useDeviceInfo } from '@/lib/device';
 import { cn, getModifierLabel, hasModifier } from '@/lib/utils';
 import { getLanguageFromExtension, getImageMimeType, isImageFile, getMimeType } from '@/lib/toolHelpers';
+import { getFileTypeInfo, getBinaryFileWarning, getFileCategory } from '@/lib/fileHelpers';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { EditorView } from '@codemirror/view';
 import type { Extension } from '@codemirror/state';
@@ -683,6 +686,13 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
     targetDir: string;
   } | null>(null);
   const [isMoving, setIsMoving] = React.useState(false);
+
+  // Binary file warning dialog state
+  const [binaryWarningDialog, setBinaryWarningDialog] = React.useState<{
+    node: FileNode;
+    title: string;
+    message: string;
+  } | null>(null);
 
   // Configure DnD sensors - different for desktop vs mobile
   const pointerSensor = useSensor(PointerSensor, {
@@ -1325,6 +1335,8 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
 
     const selectedIsImage = isImageFile(node.path);
     const isSvg = node.path.toLowerCase().endsWith('.svg');
+    const fileCategory = getFileCategory(node.path);
+    const isMediaFile = fileCategory === 'pdf' || fileCategory === 'audio' || fileCategory === 'video';
 
     if (isMobile) {
       setShowMobilePageContent(true);
@@ -1340,6 +1352,15 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
 
     // Web: binary images should not be read as utf8.
     if (!runtime.isDesktop && selectedIsImage && !isSvg) {
+      setFileContent('');
+      setDraftContent('');
+      setFileLoading(false);
+      return;
+    }
+
+    // PDF, audio, and video files are displayed via the /api/fs/raw endpoint
+    // and should not be read as text content.
+    if (isMediaFile) {
       setFileContent('');
       setDraftContent('');
       setFileLoading(false);
@@ -1420,13 +1441,32 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
     return filesList[index + 1] ?? filesList[index - 1] ?? null;
   }, []);
 
-  const handleSelectFile = React.useCallback(async (node: FileNode) => {
+  const handleSelectFile = React.useCallback(async (node: FileNode, skipBinaryCheck = false) => {
     if (skipDirtyOnceRef.current) {
       skipDirtyOnceRef.current = false;
     } else if (isDirty) {
       setConfirmDiscardOpen(true);
       pendingSelectFileRef.current = node;
       return;
+    }
+
+    // Check if this is a binary file that cannot be displayed
+    // Skip check for images (they have a viewer) and SVGs (text-based)
+    if (!skipBinaryCheck && node.type === 'file') {
+      const fileInfo = getFileTypeInfo(node.path);
+      const selectedIsImage = isImageFile(node.path);
+
+      // Only warn for binary files that cannot be displayed
+      // Images can be displayed, so don't warn about them
+      if (fileInfo.isBinary && !fileInfo.canDisplay && !selectedIsImage) {
+        const warning = getBinaryFileWarning(node.path);
+        setBinaryWarningDialog({
+          node,
+          title: warning.title,
+          message: warning.message,
+        });
+        return;
+      }
     }
 
     if (root) {
@@ -1731,11 +1771,14 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
             // Handle binary files by converting ArrayBuffer to base64
             const arrayBuffer = reader.result as ArrayBuffer;
             const bytes = new Uint8Array(arrayBuffer);
-            let binary = '';
+            // Convert to binary string first, then to base64
+            let binaryString = '';
             for (let i = 0; i < bytes.byteLength; i++) {
-              binary += String.fromCharCode(bytes[i]);
+              binaryString += String.fromCharCode(bytes[i]);
             }
-            resolve(binary);
+            // Encode as base64 and prepend data URI prefix so the server can decode it
+            const base64 = btoa(binaryString);
+            resolve(`data:application/octet-stream;base64,${base64}`);
           }
         };
         reader.onerror = () => reject(reader.error);
@@ -1751,7 +1794,7 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
         if (isTextFile) {
           reader.readAsText(file);
         } else {
-          reader.readAsText(file); // Try text first, writeFile will handle binary
+          reader.readAsArrayBuffer(file);
         }
       });
 
@@ -1902,7 +1945,7 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
     setMoveConfirmDialog({ source: sourceNode, targetDir });
   }, []);
 
-  const handleDndDragOver = React.useCallback((event: { over: { data: { current: unknown } } | null }) => {
+  const handleDndDragOver = React.useCallback((event: DragOverEvent) => {
     const overData = event.over?.data?.current as { type?: string; path?: string } | undefined;
     if (overData?.type === 'directory' && overData.path) {
       setDndDropTargetPath(overData.path);
@@ -1984,29 +2027,34 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
         !isDescendantPath(activeDndNode.path, node.path)
       ));
 
-      const fileRowElement = (
-        <FileRow
-          node={node}
-          isExpanded={isExpanded}
-          isActive={isActive}
-          isMobile={isMobile}
-          status={!isDir ? getFileStatus(node.path) : undefined}
-          badge={isDir ? getFolderBadge(node.path) : undefined}
-          permissions={{ canRename, canCreateFile, canCreateFolder, canDelete, canReveal }}
-          contextMenuPath={contextMenuPath}
-          setContextMenuPath={setContextMenuPath}
-          onSelect={handleSelectFile}
-          onToggle={toggleDirectory}
-          onRevealPath={handleRevealPath}
-          onOpenDialog={handleOpenDialog}
-          onDragStart={handleFileDragStart}
-          isUploadDropTarget={nodeIsUploadDropTarget}
-          onUploadDropTargetEnter={handleDirectoryDragEnter}
-          onUploadDropTargetLeave={handleDirectoryDragLeave}
-          isDndDragging={nodeIsDndDragging}
-          isDndDropTarget={nodeIsDndDropTarget && isValidDropTarget}
-        />
+      // Shared props for FileRow - only isDndDropTarget varies based on context
+      const fileRowProps = {
+        node,
+        isExpanded,
+        isActive,
+        isMobile,
+        status: !isDir ? getFileStatus(node.path) : undefined,
+        badge: isDir ? getFolderBadge(node.path) : undefined,
+        permissions: { canRename, canCreateFile, canCreateFolder, canDelete, canReveal },
+        contextMenuPath,
+        setContextMenuPath,
+        onSelect: handleSelectFile,
+        onToggle: toggleDirectory,
+        onRevealPath: handleRevealPath,
+        onOpenDialog: handleOpenDialog,
+        onDragStart: handleFileDragStart,
+        isUploadDropTarget: nodeIsUploadDropTarget,
+        onUploadDropTargetEnter: handleDirectoryDragEnter,
+        onUploadDropTargetLeave: handleDirectoryDragLeave,
+        isDndDragging: nodeIsDndDragging,
+      };
+
+      // Helper to render FileRow with the appropriate isDndDropTarget value
+      const renderFileRow = (isDndDropTarget: boolean) => (
+        <FileRow {...fileRowProps} isDndDropTarget={isDndDropTarget} />
       );
+
+      const fileRowElement = renderFileRow(nodeIsDndDropTarget && isValidDropTarget);
 
       // Wrap all items in DraggableFileRow for internal DnD (if rename permission exists)
       // Directories also wrap in DroppableDirectoryRow to receive drops
@@ -2018,27 +2066,7 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
               <DroppableDirectoryRow dirPath={node.path}>
                 {(isOver, setNodeRef) => (
                   <div ref={setNodeRef}>
-                    <FileRow
-                      node={node}
-                      isExpanded={isExpanded}
-                      isActive={isActive}
-                      isMobile={isMobile}
-                      status={undefined}
-                      badge={getFolderBadge(node.path)}
-                      permissions={{ canRename, canCreateFile, canCreateFolder, canDelete, canReveal }}
-                      contextMenuPath={contextMenuPath}
-                      setContextMenuPath={setContextMenuPath}
-                      onSelect={handleSelectFile}
-                      onToggle={toggleDirectory}
-                      onRevealPath={handleRevealPath}
-                      onOpenDialog={handleOpenDialog}
-                      onDragStart={handleFileDragStart}
-                      isUploadDropTarget={nodeIsUploadDropTarget}
-                      onUploadDropTargetEnter={handleDirectoryDragEnter}
-                      onUploadDropTargetLeave={handleDirectoryDragLeave}
-                      isDndDragging={nodeIsDndDragging}
-                      isDndDropTarget={isOver}
-                    />
+                    {renderFileRow(isOver)}
                   </div>
                 )}
               </DroppableDirectoryRow>
@@ -2078,17 +2106,22 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
 
   const isSelectedImage = Boolean(selectedFile?.path && isImageFile(selectedFile.path));
   const isSelectedSvg = Boolean(selectedFile?.path && selectedFile.path.toLowerCase().endsWith('.svg'));
+  const selectedFileCategory = selectedFile?.path ? getFileCategory(selectedFile.path) : null;
+  const isSelectedPdf = selectedFileCategory === 'pdf';
+  const isSelectedAudio = selectedFileCategory === 'audio';
+  const isSelectedVideo = selectedFileCategory === 'video';
+  const isSelectedMedia = isSelectedPdf || isSelectedAudio || isSelectedVideo;
   const selectedFilePath = selectedFile?.path ?? '';
 
   const displaySelectedPath = React.useMemo(() => {
     return getDisplayPath(root, selectedFilePath);
   }, [selectedFilePath, root]);
 
-  const canCopy = Boolean(selectedFile && (!isSelectedImage || isSelectedSvg) && fileContent.length > 0);
+  const canCopy = Boolean(selectedFile && (!isSelectedImage || isSelectedSvg) && !isSelectedMedia && fileContent.length > 0);
   const canCopyPath = Boolean(selectedFile && displaySelectedPath.length > 0);
-  const canEdit = Boolean(selectedFile && !isSelectedImage && files.writeFile && fileContent.length <= MAX_VIEW_CHARS);
+  const canEdit = Boolean(selectedFile && !isSelectedImage && !isSelectedMedia && files.writeFile && fileContent.length <= MAX_VIEW_CHARS);
   const isMarkdown = Boolean(selectedFile?.path && isMarkdownFile(selectedFile.path));
-  const isTextFile = Boolean(selectedFile && !isSelectedImage);
+  const isTextFile = Boolean(selectedFile && !isSelectedImage && !isSelectedMedia);
   const canUseShikiFileView = isTextFile && !isMarkdown;
   const staticLanguageExtension = React.useMemo(
     () => (selectedFilePath ? languageByExtension(selectedFilePath) : null),
@@ -2227,6 +2260,11 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
       : (isSelectedSvg
         ? `data:${getImageMimeType(selectedFile.path)};utf8,${encodeURIComponent(fileContent)}`
         : `/api/fs/raw?path=${encodeURIComponent(selectedFile.path)}`))
+    : '';
+
+  // Media source URL for PDF, audio, and video files
+  const mediaSrc = selectedFile?.path && isSelectedMedia
+    ? `/api/fs/raw?path=${encodeURIComponent(selectedFile.path)}`
     : '';
 
 
@@ -2397,6 +2435,42 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
               Save changes
             </Button>
             <Button variant="destructive" onClick={discardAndContinue}>Discard</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Binary file warning dialog */}
+      <Dialog open={binaryWarningDialog !== null} onOpenChange={(open) => {
+        if (!open) {
+          setBinaryWarningDialog(null);
+        }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{binaryWarningDialog?.title || 'Binary File'}</DialogTitle>
+            <DialogDescription className="whitespace-pre-wrap">
+              {binaryWarningDialog?.message || 'This file cannot be displayed.'}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setBinaryWarningDialog(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="default"
+              onClick={() => {
+                if (binaryWarningDialog?.node) {
+                  // Proceed with opening - skip the binary check this time
+                  void handleSelectFile(binaryWarningDialog.node, true);
+                }
+                setBinaryWarningDialog(null);
+              }}
+            >
+              Open Anyway
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -2726,6 +2800,24 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
                 className="max-w-full max-h-[70vh] object-contain rounded-md border border-border/30 bg-primary/10"
               />
             </div>
+          ) : isSelectedPdf ? (
+            <MediaViewer
+              category="pdf"
+              src={mediaSrc}
+              fileName={selectedFile?.name ?? ''}
+            />
+          ) : isSelectedAudio ? (
+            <MediaViewer
+              category="audio"
+              src={mediaSrc}
+              fileName={selectedFile?.name ?? ''}
+            />
+          ) : isSelectedVideo ? (
+            <MediaViewer
+              category="video"
+              src={mediaSrc}
+              fileName={selectedFile?.name ?? ''}
+            />
           ) : selectedFile && isMarkdown && getMdViewMode() === 'preview' ? (
             <div className="h-full overflow-auto p-3">
               {fileContent.length > 500 * 1024 && (
@@ -3172,6 +3264,27 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
                 className="max-w-full max-h-full object-contain rounded-md border border-border/30 bg-primary/10"
               />
             </div>
+          ) : isSelectedPdf ? (
+            <MediaViewer
+              category="pdf"
+              src={mediaSrc}
+              fileName={selectedFile.name}
+              fullscreen
+            />
+          ) : isSelectedAudio ? (
+            <MediaViewer
+              category="audio"
+              src={mediaSrc}
+              fileName={selectedFile.name}
+              fullscreen
+            />
+          ) : isSelectedVideo ? (
+            <MediaViewer
+              category="video"
+              src={mediaSrc}
+              fileName={selectedFile.name}
+              fullscreen
+            />
           ) : isMarkdown && getMdViewMode() === 'preview' ? (
             <div className="h-full overflow-auto p-4">
               {fileContent.length > 500 * 1024 && (

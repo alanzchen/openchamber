@@ -1,3 +1,5 @@
+import { IMAGE_EXTENSIONS } from './fileHelpers';
+
 export interface ToolMetadata {
   displayName: string;
   icon?: string;
@@ -658,11 +660,9 @@ export function getLanguageFromExtension(filePath: string): string | null {
   return languageMap[ext || ''] || null;
 }
 
-const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico', 'bmp', 'avif'];
-
 export function isImageFile(filePath: string): boolean {
   const ext = filePath.split('.').pop()?.toLowerCase();
-  return IMAGE_EXTENSIONS.includes(ext || '');
+  return IMAGE_EXTENSIONS.has(ext || '');
 }
 
 export function getImageMimeType(filePath: string): string {
@@ -677,6 +677,8 @@ export function getImageMimeType(filePath: string): string {
     'ico': 'image/x-icon',
     'bmp': 'image/bmp',
     'avif': 'image/avif',
+    'tiff': 'image/tiff',
+    'tif': 'image/tiff',
   };
   return mimeMap[ext || ''] || 'image/png';
 }
