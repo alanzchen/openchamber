@@ -56,6 +56,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { CodeMirrorEditor } from '@/components/ui/CodeMirrorEditor';
 import { PreviewToggleButton } from './PreviewToggleButton';
+import { MediaViewer } from './MediaViewer';
 import { SimpleMarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { languageByExtension, loadLanguageByExtension } from '@/lib/codemirror/languageByExtension';
 import { createFlexokiCodeMirrorTheme } from '@/lib/codemirror/flexokiTheme';
@@ -1770,11 +1771,14 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
             // Handle binary files by converting ArrayBuffer to base64
             const arrayBuffer = reader.result as ArrayBuffer;
             const bytes = new Uint8Array(arrayBuffer);
-            let binary = '';
+            // Convert to binary string first, then to base64
+            let binaryString = '';
             for (let i = 0; i < bytes.byteLength; i++) {
-              binary += String.fromCharCode(bytes[i]);
+              binaryString += String.fromCharCode(bytes[i]);
             }
-            resolve(binary);
+            // Encode as base64 and prepend data URI prefix so the server can decode it
+            const base64 = btoa(binaryString);
+            resolve(`data:application/octet-stream;base64,${base64}`);
           }
         };
         reader.onerror = () => reject(reader.error);
@@ -2797,50 +2801,23 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
               />
             </div>
           ) : isSelectedPdf ? (
-            <div className="flex h-full w-full p-3">
-              <object
-                data={mediaSrc}
-                type="application/pdf"
-                className="w-full h-full rounded-md border border-border/30"
-              >
-                <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-                  <p className="mb-2">Unable to display PDF in this browser.</p>
-                  <a
-                    href={mediaSrc}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline"
-                  >
-                    Open PDF in new tab
-                  </a>
-                </div>
-              </object>
-            </div>
+            <MediaViewer
+              category="pdf"
+              src={mediaSrc}
+              fileName={selectedFile?.name ?? ''}
+            />
           ) : isSelectedAudio ? (
-            <div className="flex h-full items-center justify-center p-3">
-              <div className="w-full max-w-md flex flex-col items-center gap-4">
-                <div className="text-sm text-muted-foreground">{selectedFile?.name}</div>
-                <audio
-                  src={mediaSrc}
-                  controls
-                  className="w-full"
-                  controlsList="nodownload"
-                >
-                  Your browser does not support the audio element.
-                </audio>
-              </div>
-            </div>
+            <MediaViewer
+              category="audio"
+              src={mediaSrc}
+              fileName={selectedFile?.name ?? ''}
+            />
           ) : isSelectedVideo ? (
-            <div className="flex h-full items-center justify-center p-3">
-              <video
-                src={mediaSrc}
-                controls
-                className="max-w-full max-h-[70vh] rounded-md border border-border/30 bg-black"
-                controlsList="nodownload"
-              >
-                Your browser does not support the video element.
-              </video>
-            </div>
+            <MediaViewer
+              category="video"
+              src={mediaSrc}
+              fileName={selectedFile?.name ?? ''}
+            />
           ) : selectedFile && isMarkdown && getMdViewMode() === 'preview' ? (
             <div className="h-full overflow-auto p-3">
               {fileContent.length > 500 * 1024 && (
@@ -3288,50 +3265,26 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
               />
             </div>
           ) : isSelectedPdf ? (
-            <div className="flex h-full w-full p-4">
-              <object
-                data={mediaSrc}
-                type="application/pdf"
-                className="w-full h-full rounded-md border border-border/30"
-              >
-                <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-                  <p className="mb-2">Unable to display PDF in this browser.</p>
-                  <a
-                    href={mediaSrc}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline"
-                  >
-                    Open PDF in new tab
-                  </a>
-                </div>
-              </object>
-            </div>
+            <MediaViewer
+              category="pdf"
+              src={mediaSrc}
+              fileName={selectedFile.name}
+              fullscreen
+            />
           ) : isSelectedAudio ? (
-            <div className="flex h-full items-center justify-center p-4">
-              <div className="w-full max-w-md flex flex-col items-center gap-4">
-                <div className="text-sm text-muted-foreground">{selectedFile.name}</div>
-                <audio
-                  src={mediaSrc}
-                  controls
-                  className="w-full"
-                  controlsList="nodownload"
-                >
-                  Your browser does not support the audio element.
-                </audio>
-              </div>
-            </div>
+            <MediaViewer
+              category="audio"
+              src={mediaSrc}
+              fileName={selectedFile.name}
+              fullscreen
+            />
           ) : isSelectedVideo ? (
-            <div className="flex h-full items-center justify-center p-4">
-              <video
-                src={mediaSrc}
-                controls
-                className="max-w-full max-h-full rounded-md border border-border/30 bg-black"
-                controlsList="nodownload"
-              >
-                Your browser does not support the video element.
-              </video>
-            </div>
+            <MediaViewer
+              category="video"
+              src={mediaSrc}
+              fileName={selectedFile.name}
+              fullscreen
+            />
           ) : isMarkdown && getMdViewMode() === 'preview' ? (
             <div className="h-full overflow-auto p-4">
               {fileContent.length > 500 * 1024 && (

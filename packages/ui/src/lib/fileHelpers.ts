@@ -120,8 +120,9 @@ const TEXT_EXTENSIONS = new Set([
 
 /**
  * Extensions for image files.
+ * Exported as the canonical source of truth for image extensions.
  */
-const IMAGE_EXTENSIONS = new Set([
+export const IMAGE_EXTENSIONS = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'bmp', 'avif', 'tiff', 'tif',
   'svg', // SVG is text-based but renders as image
 ]);
@@ -325,8 +326,8 @@ export function getFileCategory(filePath: string): FileCategory {
   // Check if it's a text file
   if (isTextFile(filePath)) return 'text';
 
-  // Unknown - default to text (allows opening unknown files)
-  return 'text';
+  // All other unrecognized files are treated as generic binary
+  return 'binary';
 }
 
 /**
@@ -456,7 +457,6 @@ export function canDisplayFile(filePath: string): boolean {
 export function getBinaryFileWarning(filePath: string): {
   title: string;
   message: string;
-  canProceed: boolean;
 } {
   const info = getFileTypeInfo(filePath);
   const filename = filePath.split('/').pop() || filePath;
@@ -465,72 +465,44 @@ export function getBinaryFileWarning(filePath: string): {
     return {
       title: '',
       message: '',
-      canProceed: true,
     };
   }
 
   switch (info.category) {
-    case 'pdf':
-      return {
-        title: 'PDF Document',
-        message: `"${filename}" is a PDF document. PDF files cannot be displayed in the file viewer. You may want to open this file with an external PDF reader.`,
-        canProceed: false,
-      };
-
-    case 'audio':
-      return {
-        title: 'Audio File',
-        message: `"${filename}" is an audio file. Audio files cannot be played in the file viewer. You may want to open this file with an external audio player.`,
-        canProceed: false,
-      };
-
-    case 'video':
-      return {
-        title: 'Video File',
-        message: `"${filename}" is a video file. Video files cannot be played in the file viewer. You may want to open this file with an external video player.`,
-        canProceed: false,
-      };
-
     case 'archive':
       return {
         title: 'Archive File',
         message: `"${filename}" is a compressed archive. Archive contents cannot be extracted or browsed in the file viewer. Use appropriate tools to extract the contents.`,
-        canProceed: false,
       };
 
     case 'executable':
       return {
         title: 'Binary Executable',
         message: `"${filename}" is an executable or compiled binary file. These files contain machine code and cannot be meaningfully displayed as text.`,
-        canProceed: false,
       };
 
     case 'font':
       return {
         title: 'Font File',
         message: `"${filename}" is a font file. Font files cannot be previewed in the file viewer. Consider using a dedicated font preview tool.`,
-        canProceed: false,
       };
 
     case 'document':
       return {
         title: 'Office Document',
         message: `"${filename}" is an Office document. These files require specialized software to view and edit. Consider opening with the appropriate application.`,
-        canProceed: false,
       };
 
     case 'data':
       return {
         title: 'Data File',
         message: `"${filename}" is a data file containing binary data. These files cannot be displayed as text.`,
-        canProceed: false,
       };
 
     default:
       return {
         title: 'Binary File',
         message: `"${filename}" appears to be a binary file that cannot be displayed as text.`,
-        canProceed: false,
       };
   }
 }
