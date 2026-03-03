@@ -1838,41 +1838,26 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
     const filePath = normalizePath(`${targetDir}/${file.name}`);
 
     try {
-      // Check if it's a text file based on MIME type
-      const isTextFile = file.type.startsWith('text/') ||
-        file.type === 'application/json' ||
-        file.type === 'application/xml' ||
-        file.type === 'application/javascript' ||
-        file.type === 'application/typescript' ||
-        file.type === '';
+      // Use getFileCategory for more robust file type detection
+      const category = getFileCategory(file.name);
+      const isTextFile = category === 'text';
 
       // Read file content
       const content = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => {
-          if (typeof reader.result === 'string') {
-            if (isTextFile) {
-              // Text file - use as-is
-              resolve(reader.result);
-            } else {
-              // Binary file - strip data URI prefix to get base64
-              const dataUrl = reader.result;
-              const base64Index = dataUrl.indexOf('base64,');
-              if (base64Index !== -1) {
-                resolve(dataUrl.substring(base64Index + 7));
-              } else {
-                reject(new Error('Failed to extract base64 from data URL'));
-              }
-            }
-          } else {
-            reject(new Error('Unexpected reader result type'));
-          }
-        };
         reader.onerror = () => reject(reader.error);
 
         if (isTextFile) {
+          reader.onload = () => resolve(reader.result as string);
           reader.readAsText(file);
         } else {
+          // For binary files, read as data URL and extract base64 content
+          // This is more robust and performant than manual ArrayBuffer to base64 conversion
+          reader.onload = () => {
+            const dataUrl = reader.result as string;
+            const content = dataUrl.substring(dataUrl.indexOf(',') + 1);
+            resolve(content);
+          };
           reader.readAsDataURL(file);
         }
       });
