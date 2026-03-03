@@ -26,6 +26,7 @@ import {
   RiUploadCloud2Line,
   RiDragMove2Fill,
   RiFileTransferLine,
+  RiDownloadLine,
 } from '@remixicon/react';
 import {
   DndContext,
@@ -589,6 +590,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
   const [searchQuery, setSearchQuery] = React.useState('');
   const debouncedSearchQuery = useDebouncedValue(searchQuery, 200);
   const searchInputRef = React.useRef<HTMLInputElement>(null);
+  const fileUploadInputRef = React.useRef<HTMLInputElement>(null);
 
   const [showMobilePageContent, setShowMobilePageContent] = React.useState(false);
   const [wrapLines, setWrapLines] = React.useState(isMobile);
@@ -1822,6 +1824,22 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
     }
   }, [runtime.isDesktop]);
 
+  // Download button handler
+  const handleDownloadFile = React.useCallback(() => {
+    if (!selectedFile) return;
+
+    const fileName = selectedFile.name;
+    const downloadUrl = `/api/fs/raw?path=${encodeURIComponent(selectedFile.path)}`;
+
+    // Create a temporary anchor element and trigger download
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [selectedFile]);
+
   // Drag-and-drop upload helpers
   const hasDraggedFiles = React.useCallback((dataTransfer: DataTransfer | null | undefined): boolean => {
     if (!dataTransfer) return false;
@@ -1921,6 +1939,25 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
       toast.error(`Failed to upload ${failCount} file${failCount > 1 ? 's' : ''}`);
     }
   }, [files.writeFile, refreshRoot, uploadFile]);
+
+  const handleFileUploadFromDialog = React.useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0 || !dialogData) return;
+
+    const targetDir = dialogData.path;
+    const fileArray = Array.from(files);
+
+    // Close the dialog first
+    setActiveDialog(null);
+
+    // Upload the files
+    await handleFileDrop(fileArray, targetDir);
+
+    // Reset the input
+    if (fileUploadInputRef.current) {
+      fileUploadInputRef.current.value = '';
+    }
+  }, [dialogData, handleFileDrop]);
 
   const handleTreeDragEnter = React.useCallback((e: React.DragEvent) => {
     if (!hasDraggedFiles(e.dataTransfer) || !files.writeFile) return;
@@ -2634,7 +2671,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
         </DialogHeader>
 
         {activeDialog !== 'delete' && (
-          <div className="py-4">
+          <div className="py-4 space-y-4">
             <Input
               value={dialogInputValue}
               onChange={(e) => setDialogInputValue(e.target.value)}
@@ -2646,6 +2683,32 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
               }}
               autoFocus
               />
+            {activeDialog === 'createFile' && files.writeFile && (
+              <>
+                <div className="relative flex items-center gap-2">
+                  <div className="flex-1 h-px bg-border" />
+                  <span className="text-xs text-muted-foreground">or</span>
+                  <div className="flex-1 h-px bg-border" />
+                </div>
+                <input
+                  ref={fileUploadInputRef}
+                  type="file"
+                  multiple
+                  onChange={handleFileUploadFromDialog}
+                  className="hidden"
+                  id="dialog-file-upload"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => fileUploadInputRef.current?.click()}
+                >
+                  <RiUploadCloud2Line className="mr-2 h-4 w-4" />
+                  Upload File
+                </Button>
+              </>
+            )}
             </div>
           )}
 
@@ -2977,6 +3040,19 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
                 ) : null}
               </DropdownMenuContent>
             </DropdownMenu>
+
+            {!runtime.isDesktop && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleDownloadFile}
+                className="h-5 w-5 p-0 text-muted-foreground opacity-70 hover:opacity-100"
+                title="Download file"
+                aria-label="Download file"
+              >
+                <RiDownloadLine className="h-4 w-4" />
+              </Button>
+            )}
 
             {canEdit && !isSelectedImage && (
               <span aria-hidden="true" className="mx-1 h-4 w-px bg-border/60" />
