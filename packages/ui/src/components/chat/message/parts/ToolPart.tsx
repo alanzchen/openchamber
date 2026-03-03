@@ -1754,7 +1754,7 @@ const ToolPart: React.FC<ToolPartProps> = ({
                                 <LiveDuration
                                     start={effectiveTimeStart}
                                     end={typeof effectiveTimeEnd === 'number' ? effectiveTimeEnd : undefined}
-                                    active={Boolean(isActive && typeof effectiveTimeEnd !== 'number')}
+                                    active={Boolean(isTaskTool && isActive && typeof effectiveTimeEnd !== 'number')}
                                 />
                             </span>
                             {!isMobile && endedTimestampText ? (

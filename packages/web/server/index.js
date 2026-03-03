@@ -11788,6 +11788,7 @@ async function main(options = {}) {
 
       const ext = path.extname(canonicalPath).toLowerCase();
       const mimeMap = {
+        // Images
         '.png': 'image/png',
         '.jpg': 'image/jpeg',
         '.jpeg': 'image/jpeg',
@@ -11797,6 +11798,23 @@ async function main(options = {}) {
         '.ico': 'image/x-icon',
         '.bmp': 'image/bmp',
         '.avif': 'image/avif',
+        // PDF
+        '.pdf': 'application/pdf',
+        // Audio
+        '.mp3': 'audio/mpeg',
+        '.wav': 'audio/wav',
+        '.ogg': 'audio/ogg',
+        '.m4a': 'audio/mp4',
+        '.aac': 'audio/aac',
+        '.flac': 'audio/flac',
+        '.opus': 'audio/opus',
+        // Video
+        '.mp4': 'video/mp4',
+        '.webm': 'video/webm',
+        '.ogv': 'video/ogg',
+        '.mov': 'video/quicktime',
+        '.avi': 'video/x-msvideo',
+        '.mkv': 'video/x-matroska',
       };
       const mimeType = mimeMap[ext] || 'application/octet-stream';
 
@@ -11818,7 +11836,7 @@ async function main(options = {}) {
 
   // Write file contents
   app.post('/api/fs/write', async (req, res) => {
-    const { path: filePath, content } = req.body || {};
+    const { path: filePath, content, encoding } = req.body || {};
     if (!filePath || typeof filePath !== 'string') {
       return res.status(400).json({ error: 'Path is required' });
     }
@@ -11834,7 +11852,28 @@ async function main(options = {}) {
 
       // Ensure parent directory exists
       await fsPromises.mkdir(path.dirname(resolved.resolved), { recursive: true });
-      await fsPromises.writeFile(resolved.resolved, content, 'utf8');
+
+      // Use explicit encoding parameter if provided
+      if (encoding === 'base64') {
+        // Validate base64 before decoding
+        const isValidBase64 = /^[A-Za-z0-9+/]*={0,2}$/.test(content) && content.length % 4 === 0;
+        if (!isValidBase64) {
+          return res.status(400).json({ error: 'Invalid base64 content' });
+        }
+
+        const buffer = Buffer.from(content, 'base64');
+        // Verify decoding worked correctly by re-encoding and comparing
+        const reencoded = buffer.toString('base64');
+        if (reencoded !== content) {
+          return res.status(400).json({ error: 'Base64 decode verification failed' });
+        }
+
+        await fsPromises.writeFile(resolved.resolved, buffer);
+      } else {
+        // Write as UTF-8 text
+        await fsPromises.writeFile(resolved.resolved, content, 'utf8');
+      }
+
       res.json({ success: true, path: resolved.resolved });
     } catch (error) {
       const err = error;
