@@ -1537,6 +1537,25 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
       // Images can be displayed, so don't warn about them
       if (fileInfo.isBinary && !fileInfo.canDisplay && !selectedIsImage) {
         const warning = getBinaryFileWarning(node.path);
+
+        // Update selection state so the file shows as selected in the tree
+        if (root) {
+          setSelectedPath(root, node.path);
+          addOpenPath(root, node.path);
+          void ensurePathVisible(node.path, false);
+        }
+
+        // Clear file content since we're not loading it
+        setFileError(null);
+        setDesktopImageSrc('');
+        setFileContent('');
+        setDraftContent('');
+        setLoadedFilePath(null);
+        if (isMobile) {
+          setShowMobilePageContent(true);
+        }
+
+        // Show warning dialog
         setBinaryWarningDialog({
           node,
           title: warning.title,
