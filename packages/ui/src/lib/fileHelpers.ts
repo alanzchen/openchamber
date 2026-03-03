@@ -123,7 +123,7 @@ const TEXT_EXTENSIONS = new Set([
  * Exported as the canonical source of truth for image extensions.
  */
 export const IMAGE_EXTENSIONS = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'bmp', 'avif', 'tiff', 'tif',
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'bmp', 'avif',
   'svg', // SVG is text-based but renders as image
 ]);
 
@@ -155,7 +155,7 @@ const ARCHIVE_EXTENSIONS = new Set([
  * Extensions for executable files.
  */
 const EXECUTABLE_EXTENSIONS = new Set([
-  'exe', 'dll', 'so', 'dylib', 'app', 'msi', 'bin', 'com', 'bat', 'cmd',
+  'exe', 'dll', 'so', 'dylib', 'app', 'msi', 'bin', 'com',
   'out', // Common compiled binary name
   'a', 'lib', // Static libraries
   'o', 'obj', // Object files
@@ -249,6 +249,10 @@ export function isTextFile(filePath: string): boolean {
     'podfile', 'vagrantfile', 'guardfile', 'brewfile', 'fastfile',
     'procfile', 'codeowners', 'license', 'readme', 'changelog',
     'authors', 'contributors', 'copying', 'notice', 'todo',
+    // Common dotfiles
+    '.gitignore', '.gitattributes', '.gitmodules',
+    '.editorconfig', '.npmrc', '.yarnrc', '.prettierrc', '.eslintrc', '.babelrc',
+    '.browserslistrc',
   ];
 
   return textFilenames.includes(filename);

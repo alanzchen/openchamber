@@ -11751,7 +11751,25 @@ async function main(options = {}) {
 
       // Ensure parent directory exists
       await fsPromises.mkdir(path.dirname(resolved.resolved), { recursive: true });
-      await fsPromises.writeFile(resolved.resolved, content, 'utf8');
+
+      // Check if content is base64-encoded (simple heuristic: valid base64 characters only)
+      // Base64 strings only contain [A-Za-z0-9+/=] and are typically longer
+      const isLikelyBase64 = content.length > 100 && /^[A-Za-z0-9+/]+=*$/.test(content);
+
+      if (isLikelyBase64) {
+        // Try to decode as base64 and write as binary
+        try {
+          const buffer = Buffer.from(content, 'base64');
+          await fsPromises.writeFile(resolved.resolved, buffer);
+        } catch (decodeError) {
+          // If base64 decode fails, fall back to UTF-8 text
+          await fsPromises.writeFile(resolved.resolved, content, 'utf8');
+        }
+      } else {
+        // Write as UTF-8 text
+        await fsPromises.writeFile(resolved.resolved, content, 'utf8');
+      }
+
       res.json({ success: true, path: resolved.resolved });
     } catch (error) {
       const err = error;

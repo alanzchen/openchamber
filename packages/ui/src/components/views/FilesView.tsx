@@ -619,6 +619,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
   const [fileLoading, setFileLoading] = React.useState(false);
   const [fileError, setFileError] = React.useState<string | null>(null);
   const [desktopImageSrc, setDesktopImageSrc] = React.useState<string>('');
+  const [desktopMediaSrc, setDesktopMediaSrc] = React.useState<string>('');
 
   const [loadedFilePath, setLoadedFilePath] = React.useState<string | null>(null);
 
@@ -1776,9 +1777,9 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
             for (let i = 0; i < bytes.byteLength; i++) {
               binaryString += String.fromCharCode(bytes[i]);
             }
-            // Encode as base64 and prepend data URI prefix so the server can decode it
+            // Encode as base64 - the base64 string itself can be written as UTF-8
             const base64 = btoa(binaryString);
-            resolve(`data:application/octet-stream;base64,${base64}`);
+            resolve(base64);
           }
         };
         reader.onerror = () => reject(reader.error);
@@ -2264,11 +2265,10 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
 
   // Media source URL for PDF, audio, and video files
   const mediaSrc = selectedFile?.path && isSelectedMedia
-    ? `/api/fs/raw?path=${encodeURIComponent(selectedFile.path)}`
+    ? (runtime.isDesktop
+      ? desktopMediaSrc
+      : `/api/fs/raw?path=${encodeURIComponent(selectedFile.path)}`)
     : '';
-
-
-
 
   React.useEffect(() => {
     let cancelled = false;
@@ -2310,6 +2310,42 @@ const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
       cancelled = true;
     };
   }, [files, isSelectedImage, isSelectedSvg, runtime.isDesktop, selectedFile?.path]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    const resolveDesktopMedia = async () => {
+      if (!runtime.isDesktop || !selectedFile?.path || !isSelectedMedia) {
+        setDesktopMediaSrc('');
+        return;
+      }
+
+      setFileError(null);
+
+      const srcPromise = files.readFileBinary
+        ? files.readFileBinary(selectedFile.path).then((result) => result.dataUrl)
+        : Promise.resolve(convertFileSrc(selectedFile.path, 'asset'));
+
+      await srcPromise
+        .then((src) => {
+          if (!cancelled) {
+            setDesktopMediaSrc(src);
+          }
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setDesktopMediaSrc('');
+            setFileError(error instanceof Error ? error.message : 'Failed to read file');
+          }
+        });
+    };
+
+    void resolveDesktopMedia();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [files, isSelectedMedia, runtime.isDesktop, selectedFile?.path]);
 
   const renderDialogs = () => (
     <Dialog open={!!activeDialog} onOpenChange={(open) => !open && setActiveDialog(null)}>
