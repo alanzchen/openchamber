@@ -477,7 +477,7 @@ export interface FilesAPI {
   createDirectory(path: string): Promise<{ success: boolean; path: string }>;
   readFile?(path: string): Promise<{ content: string; path: string }>;
   readFileBinary?(path: string): Promise<{ dataUrl: string; path: string }>;
-  writeFile?(path: string, content: string): Promise<{ success: boolean; path: string }>;
+  writeFile?(path: string, content: string, encoding?: 'utf8' | 'base64'): Promise<{ success: boolean; path: string }>;
   delete?(path: string): Promise<{ success: boolean }>;
   rename?(oldPath: string, newPath: string): Promise<{ success: boolean; path: string }>;
   revealPath?(path: string): Promise<{ success: boolean }>;

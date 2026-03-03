@@ -142,12 +142,12 @@ export const createWebFilesAPI = (): FilesAPI => ({
     return { content, path: target };
   },
 
-  async writeFile(path: string, content: string): Promise<{ success: boolean; path: string }> {
+  async writeFile(path: string, content: string, encoding?: 'utf8' | 'base64'): Promise<{ success: boolean; path: string }> {
     const target = normalizePath(path);
     const response = await fetch('/api/fs/write', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: target, content }),
+      body: JSON.stringify({ path: target, content, encoding }),
     });
 
     if (!response.ok) {

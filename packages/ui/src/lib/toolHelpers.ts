@@ -677,8 +677,6 @@ export function getImageMimeType(filePath: string): string {
     'ico': 'image/x-icon',
     'bmp': 'image/bmp',
     'avif': 'image/avif',
-    'tiff': 'image/tiff',
-    'tif': 'image/tiff',
   };
   return mimeMap[ext || ''] || 'image/png';
 }

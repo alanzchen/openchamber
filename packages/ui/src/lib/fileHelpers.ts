@@ -330,8 +330,9 @@ export function getFileCategory(filePath: string): FileCategory {
   // Check if it's a text file
   if (isTextFile(filePath)) return 'text';
 
-  // All other unrecognized files are treated as generic binary
-  return 'binary';
+  // For all other unrecognized files, assume they might be text
+  // (this allows opening unknown file types without warnings)
+  return 'text';
 }
 
 /**

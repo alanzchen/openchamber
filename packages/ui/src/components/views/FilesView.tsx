@@ -1838,44 +1838,47 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
     const filePath = normalizePath(`${targetDir}/${file.name}`);
 
     try {
+      // Check if it's a text file based on MIME type
+      const isTextFile = file.type.startsWith('text/') ||
+        file.type === 'application/json' ||
+        file.type === 'application/xml' ||
+        file.type === 'application/javascript' ||
+        file.type === 'application/typescript' ||
+        file.type === '';
+
       // Read file content
       const content = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => {
           if (typeof reader.result === 'string') {
-            resolve(reader.result);
-          } else {
-            // Handle binary files by converting ArrayBuffer to base64
-            const arrayBuffer = reader.result as ArrayBuffer;
-            const bytes = new Uint8Array(arrayBuffer);
-            // Convert to binary string first, then to base64
-            let binaryString = '';
-            for (let i = 0; i < bytes.byteLength; i++) {
-              binaryString += String.fromCharCode(bytes[i]);
+            if (isTextFile) {
+              // Text file - use as-is
+              resolve(reader.result);
+            } else {
+              // Binary file - strip data URI prefix to get base64
+              const dataUrl = reader.result;
+              const base64Index = dataUrl.indexOf('base64,');
+              if (base64Index !== -1) {
+                resolve(dataUrl.substring(base64Index + 7));
+              } else {
+                reject(new Error('Failed to extract base64 from data URL'));
+              }
             }
-            // Encode as base64 - the base64 string itself can be written as UTF-8
-            const base64 = btoa(binaryString);
-            resolve(base64);
+          } else {
+            reject(new Error('Unexpected reader result type'));
           }
         };
         reader.onerror = () => reject(reader.error);
 
-        // Check if it's a text file based on MIME type
-        const isTextFile = file.type.startsWith('text/') ||
-          file.type === 'application/json' ||
-          file.type === 'application/xml' ||
-          file.type === 'application/javascript' ||
-          file.type === 'application/typescript' ||
-          file.type === '';
-
         if (isTextFile) {
           reader.readAsText(file);
         } else {
-          reader.readAsArrayBuffer(file);
+          reader.readAsDataURL(file);
         }
       });
 
-      const result = await files.writeFile(filePath, content);
+      const encoding = isTextFile ? 'utf8' : 'base64';
+      const result = await files.writeFile(filePath, content, encoding);
       return result.success;
     } catch (error) {
       console.error('Failed to upload file:', error);
@@ -1936,7 +1939,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
   const handleTreeDragLeave = React.useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    dragCounterRef.current--;
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
     if (dragCounterRef.current === 0) {
       setIsDraggingFiles(false);
       setDropTargetPath(null);
