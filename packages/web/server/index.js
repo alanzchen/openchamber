@@ -11851,7 +11851,15 @@ async function main(options = {}) {
 
       // Ensure parent directory exists
       await fsPromises.mkdir(path.dirname(resolved.resolved), { recursive: true });
-      await fsPromises.writeFile(resolved.resolved, content, 'utf8');
+
+      // Support base64 data URL content (e.g. binary file uploads)
+      const dataUrlMatch = content.match(/^data:[^;,]+;base64,/);
+      if (dataUrlMatch) {
+        const base64Data = content.slice(dataUrlMatch[0].length);
+        await fsPromises.writeFile(resolved.resolved, Buffer.from(base64Data, 'base64'));
+      } else {
+        await fsPromises.writeFile(resolved.resolved, content, 'utf8');
+      }
       res.json({ success: true, path: resolved.resolved });
     } catch (error) {
       const err = error;

@@ -644,6 +644,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
   const isSelectingRef = React.useRef(false);
   const selectionStartRef = React.useRef<number | null>(null);
   const [isDragging, setIsDragging] = React.useState(false);
+  const [isFilesDropping, setIsFilesDropping] = React.useState(false);
 
   // Session/config for sending comments
   const setMainTabGuard = useUIStore((state) => state.setMainTabGuard);
@@ -866,6 +867,66 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
       void loadDirectory(root);
     }
   }, [loadDirectory, root, showGitignored, showHidden]);
+
+  const handleTreeUploadFiles = React.useCallback(async (filesToUpload: File[]) => {
+    if (!files.writeFile || filesToUpload.length === 0) return;
+    let uploadedCount = 0;
+    for (const file of filesToUpload) {
+      // Sanitize file name: strip path separators to prevent path traversal
+      const safeName = file.name.replace(/[/\\]/g, '_');
+      const prefix = currentDirectory ? `${currentDirectory}/` : '';
+      const targetPath = normalizePath(`${prefix}${safeName}`);
+      try {
+        const content = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        await files.writeFile(targetPath, content);
+        uploadedCount++;
+      } catch (error) {
+        console.error('File upload failed:', error);
+        toast.error(`Failed to upload "${file.name}"`);
+      }
+    }
+    if (uploadedCount > 0) {
+      toast.success(`Uploaded ${uploadedCount} file${uploadedCount > 1 ? 's' : ''}`);
+      await refreshRoot();
+    }
+  }, [currentDirectory, files, refreshRoot]);
+
+  const handleTreeDragEnter = React.useCallback((e: React.DragEvent) => {
+    if (!canCreateFile) return;
+    if (!Array.from(e.dataTransfer.types).includes('Files')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setIsFilesDropping(true);
+  }, [canCreateFile]);
+
+  const handleTreeDragOver = React.useCallback((e: React.DragEvent) => {
+    if (!canCreateFile) return;
+    if (!Array.from(e.dataTransfer.types).includes('Files')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+  }, [canCreateFile]);
+
+  const handleTreeDragLeave = React.useCallback((e: React.DragEvent) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsFilesDropping(false);
+    }
+  }, []);
+
+  const handleTreeDrop = React.useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsFilesDropping(false);
+    if (!canCreateFile) return;
+    const droppedFiles = Array.from(e.dataTransfer.files || []);
+    if (droppedFiles.length === 0) return;
+    await handleTreeUploadFiles(droppedFiles);
+  }, [canCreateFile, handleTreeUploadFiles]);
 
   const handleDialogSubmit = React.useCallback(async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -2603,10 +2664,23 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
   const hasTree = Boolean(root && childrenByDir[root]);
 
   const treePanel = (
-    <section className={cn(
-      "flex min-h-0 flex-col overflow-hidden",
-      isMobile ? "h-full w-full bg-background" : "h-full rounded-xl border border-border/60 bg-background/70"
-    )}>
+    <section
+      className={cn(
+        "flex min-h-0 flex-col overflow-hidden relative",
+        isMobile ? "h-full w-full bg-background" : "h-full rounded-xl border border-border/60 bg-background/70",
+        isFilesDropping && "ring-2 ring-primary/50"
+      )}
+      onDragEnter={handleTreeDragEnter}
+      onDragOver={handleTreeDragOver}
+      onDragLeave={handleTreeDragLeave}
+      onDrop={(e) => void handleTreeDrop(e)}
+    >
+      {isFilesDropping && (
+        <div className="pointer-events-none absolute inset-0 z-50 flex flex-col items-center justify-center gap-2 rounded-xl bg-background/80">
+          <RiFileTransferLine className="h-8 w-8 text-muted-foreground" />
+          <span className="typography-ui text-muted-foreground">Drop to upload</span>
+        </div>
+      )}
       <div className={cn("flex flex-col gap-2 py-2", isMobile ? "px-3" : "px-2")}>
         <div className="flex items-center gap-2">
           <div className="relative flex-1 min-w-0">
