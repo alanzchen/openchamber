@@ -92,8 +92,21 @@ export const createWebFilesAPI = (): FilesAPI => ({
     const response = await fetch(`/api/fs/stat?path=${encodeURIComponent(target)}`);
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: response.statusText }));
-      throw new Error((error as { error?: string }).error || 'Failed to stat file');
+      let message: string | undefined;
+
+      try {
+        const error = (await response.json()) as { error?: string; message?: string };
+        message = error.error || error.message;
+      } catch {
+        try {
+          const text = await response.text();
+          message = text || undefined;
+        } catch {
+          // Ignore text parsing errors and fall back to status text.
+        }
+      }
+
+      throw new Error(message || response.statusText || 'Failed to stat file');
     }
 
     const result = (await response.json()) as WebFileStatResponse;
