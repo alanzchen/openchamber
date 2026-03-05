@@ -17,7 +17,6 @@
  * - font: Font files (WOFF, TTF, etc.)
  * - document: Office documents (DOC, DOCX, XLS, etc.)
  * - data: Data files (databases, etc.)
- * - binary: Other binary files that don't fit above categories
  */
 export type FileCategory =
   | 'text'
@@ -29,8 +28,7 @@ export type FileCategory =
   | 'executable'
   | 'font'
   | 'document'
-  | 'data'
-  | 'binary';
+  | 'data';
 
 /**
  * Information about a file's type and how it should be handled.
@@ -475,14 +473,12 @@ export function getFileTypeInfo(filePath: string): FileTypeInfo {
         suggestedAction: 'Data files cannot be displayed as text. These files contain binary data.',
       };
 
-    case 'binary':
     default:
       return {
-        category: 'binary',
-        isBinary: true,
-        canDisplay: false,
-        description: 'Binary file',
-        suggestedAction: 'This binary file cannot be displayed as text.',
+        category: 'text',
+        isBinary: false,
+        canDisplay: true,
+        description: 'Text file',
       };
   }
 }

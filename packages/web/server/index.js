@@ -533,6 +533,75 @@ const resolveWorkspacePathFromContext = async (req, targetPath) => {
   return resolveWorkspacePathFromWorktrees(targetPath, resolvedProject.directory);
 };
 
+const resolveCanonicalPath = async (targetPath) => {
+  return fsPromises.realpath(targetPath).catch(() => path.resolve(targetPath));
+};
+
+const findNearestExistingPath = async (targetPath) => {
+  let current = path.resolve(targetPath);
+
+  while (true) {
+    try {
+      await fsPromises.lstat(current);
+      return current;
+    } catch (error) {
+      if (!error || typeof error !== 'object' || error.code !== 'ENOENT') {
+        throw error;
+      }
+
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return current;
+      }
+      current = parent;
+    }
+  }
+};
+
+const resolveWritableTargetPath = async (targetPath, basePath) => {
+  const resolvedTargetPath = path.resolve(targetPath);
+  const canonicalBase = await resolveCanonicalPath(basePath);
+
+  let targetExists = false;
+  try {
+    await fsPromises.lstat(resolvedTargetPath);
+    targetExists = true;
+  } catch (error) {
+    if (!error || typeof error !== 'object' || error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  const validationStartPath = targetExists
+    ? resolvedTargetPath
+    : path.dirname(resolvedTargetPath);
+  const nearestExistingPath = await findNearestExistingPath(validationStartPath);
+  const canonicalNearestExistingPath = await resolveCanonicalPath(nearestExistingPath);
+
+  if (!isPathWithinRoot(canonicalNearestExistingPath, canonicalBase)) {
+    return { ok: false };
+  }
+
+  const targetDirectory = path.dirname(resolvedTargetPath);
+  await fsPromises.mkdir(targetDirectory, { recursive: true });
+
+  const canonicalTargetDirectory = await resolveCanonicalPath(targetDirectory);
+  if (!isPathWithinRoot(canonicalTargetDirectory, canonicalBase)) {
+    return { ok: false };
+  }
+
+  if (targetExists) {
+    const canonicalTargetPath = await resolveCanonicalPath(resolvedTargetPath);
+    if (!isPathWithinRoot(canonicalTargetPath, canonicalBase)) {
+      return { ok: false };
+    }
+
+    return { ok: true, path: canonicalTargetPath };
+  }
+
+  return { ok: true, path: path.join(canonicalTargetDirectory, path.basename(resolvedTargetPath)) };
+};
+
 
 const normalizeRelativeSearchPath = (rootPath, targetPath) => {
   const relative = path.relative(rootPath, targetPath) || path.basename(targetPath);
@@ -12927,9 +12996,13 @@ async function main(options = {}) {
         return res.status(400).json({ error: resolved.error });
       }
 
-      await fsPromises.mkdir(path.dirname(resolved.resolved), { recursive: true });
+      const writableTarget = await resolveWritableTargetPath(resolved.resolved, resolved.base);
+      if (!writableTarget.ok) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
 
-      tempFilePath = `${resolved.resolved}.upload-${Date.now()}-${crypto.randomUUID()}.tmp`;
+      const targetWritePath = writableTarget.path;
+      tempFilePath = `${targetWritePath}.upload-${Date.now()}-${crypto.randomUUID()}.tmp`;
 
       let receivedBytes = 0;
       req.on('data', (chunk) => {
@@ -12949,14 +13022,14 @@ async function main(options = {}) {
         });
       }
 
-      await fsPromises.rename(tempFilePath, resolved.resolved);
+      await fsPromises.rename(tempFilePath, targetWritePath);
       tempFilePath = '';
 
-      const stats = await fsPromises.stat(resolved.resolved);
+      const stats = await fsPromises.stat(targetWritePath);
       const sizeBytes = stats.size;
 
       if (typeof expectedSizeBytes === 'number' && sizeBytes !== expectedSizeBytes) {
-        await fsPromises.rm(resolved.resolved, { force: true });
+        await fsPromises.rm(targetWritePath, { force: true });
         return res.status(400).json({
           error: `Uploaded size mismatch: expected ${expectedSizeBytes} bytes but wrote ${sizeBytes} bytes`,
         });
@@ -13001,6 +13074,9 @@ async function main(options = {}) {
     if (expectedSizeBytes !== undefined && normalizedExpectedSize === undefined) {
       return res.status(400).json({ error: 'expectedSizeBytes must be a non-negative number' });
     }
+    if (encoding !== undefined && encoding !== 'utf8' && encoding !== 'base64') {
+      return res.status(400).json({ error: 'encoding must be utf8 or base64' });
+    }
 
     try {
       const resolved = await resolveWorkspacePathFromContext(req, filePath);
@@ -13008,29 +13084,19 @@ async function main(options = {}) {
         return res.status(400).json({ error: resolved.error });
       }
 
-      await fsPromises.mkdir(path.dirname(resolved.resolved), { recursive: true });
+      const writableTarget = await resolveWritableTargetPath(resolved.resolved, resolved.base);
+      if (!writableTarget.ok) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+      const targetWritePath = writableTarget.path;
 
       let actualContent = content;
-      let isBase64 = encoding === 'base64';
+      const hasBase64DataUrlPrefix = /^data:[^;]*;base64,/.test(content);
+      const isBase64 = encoding === 'base64' || (encoding === undefined && hasBase64DataUrlPrefix);
 
-      if (!isBase64 && /^data:[^;]*;base64,/.test(content)) {
+      if (isBase64 && hasBase64DataUrlPrefix) {
         const commaIndex = content.indexOf(',');
         actualContent = content.substring(commaIndex + 1);
-        isBase64 = true;
-      }
-
-      if (!isBase64 && encoding === undefined) {
-        if (/^[A-Za-z0-9+/]+=*$/.test(actualContent)) {
-          try {
-            const decoded = Buffer.from(actualContent, 'base64');
-            const reencoded = decoded.toString('base64');
-            if (reencoded === actualContent) {
-              isBase64 = true;
-            }
-          } catch {
-            // Not valid base64, treat as text.
-          }
-        }
       }
 
       let bytesWritten = 0;
@@ -13044,9 +13110,9 @@ async function main(options = {}) {
           });
         }
 
-        await fsPromises.writeFile(resolved.resolved, buffer);
+        await fsPromises.writeFile(targetWritePath, buffer);
       } else {
-        const buffer = Buffer.from(content, 'utf8');
+        const buffer = Buffer.from(actualContent, 'utf8');
         bytesWritten = buffer.byteLength;
 
         if (typeof normalizedExpectedSize === 'number' && bytesWritten !== normalizedExpectedSize) {
@@ -13055,10 +13121,10 @@ async function main(options = {}) {
           });
         }
 
-        await fsPromises.writeFile(resolved.resolved, buffer);
+        await fsPromises.writeFile(targetWritePath, buffer);
       }
 
-      const stats = await fsPromises.stat(resolved.resolved);
+      const stats = await fsPromises.stat(targetWritePath);
       const sizeBytes = stats.size;
 
       if (typeof normalizedExpectedSize === 'number' && sizeBytes !== normalizedExpectedSize) {
@@ -13569,16 +13635,23 @@ async function main(options = {}) {
           let modifiedTime;
 
           try {
-            const entryStats = await fsPromises.stat(entryPath);
-            isDirectory = entryStats.isDirectory();
-            isFile = entryStats.isFile();
-            if (entryStats.isFile()) {
+            const entryStats = await fsPromises.lstat(entryPath);
+            if (isSymbolicLink) {
+              isDirectory = false;
+              isFile = false;
+            } else {
+              isDirectory = entryStats.isDirectory();
+              isFile = entryStats.isFile();
+            }
+
+            if (isFile) {
               size = entryStats.size;
             }
             modifiedTime = Number.isFinite(entryStats.mtimeMs) ? entryStats.mtimeMs : undefined;
           } catch {
-            if (!isDirectory && isSymbolicLink) {
+            if (isSymbolicLink) {
               isDirectory = false;
+              isFile = false;
             }
           }
 
