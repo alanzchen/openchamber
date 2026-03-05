@@ -31,7 +31,7 @@ import { toast } from '@/components/ui';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { triggerFileDownload } from '@/lib/fileDownload';
 import { subscribeToFileContentInvalidated } from '@/lib/fileContentInvalidation';
-import { getFriendlyUploadErrorMessage, getUploadPreflightError } from '@/lib/fileUploadGuards';
+import { uploadFileWithFallback } from '@/lib/fileUpload';
 
 import {
   DropdownMenu,
@@ -63,7 +63,7 @@ import { useFileSearchStore } from '@/stores/useFileSearchStore';
 import { useDeviceInfo } from '@/lib/device';
 import { cn, getModifierLabel, hasModifier } from '@/lib/utils';
 import { getLanguageFromExtension, getImageMimeType, isImageFile } from '@/lib/toolHelpers';
-import { getFileTypeInfo, getBinaryFileWarning, getFileCategory, isBinaryFile, looksLikeBinaryContent } from '@/lib/fileHelpers';
+import { getFileTypeInfo, getBinaryFileWarning, getFileCategory, looksLikeBinaryContent } from '@/lib/fileHelpers';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { EditorView } from '@codemirror/view';
 import type { Extension } from '@codemirror/state';
@@ -2151,85 +2151,18 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
     file: File,
     targetDir: string,
   ): Promise<{ success: true } | { success: false; error: string }> => {
-    if (!files.uploadFile && !files.writeFile) {
-      return { success: false, error: 'File upload not supported' };
-    }
-
-    const filePath = normalizePath(`${targetDir}/${file.name}`);
-    const preflightError = getUploadPreflightError({
-      fileName: file.name,
-      sizeBytes: file.size,
-      isBinary: isBinaryFile(file.name),
-      supportsStreamingUpload: Boolean(files.uploadFile),
+    const result = await uploadFileWithFallback({
+      files,
+      file,
+      targetDir,
+      normalizePath,
     });
 
-    if (preflightError) {
-      return { success: false, error: preflightError };
-    }
-
-    try {
-      if (files.uploadFile) {
-        const uploadResult = await files.uploadFile(filePath, file, {
-          expectedSizeBytes: file.size,
-        });
-
-        if (!uploadResult.success) {
-          return { success: false, error: 'Upload failed' };
-        }
-
-        if (typeof uploadResult.sizeBytes === 'number' && uploadResult.sizeBytes !== file.size) {
-          return {
-            success: false,
-            error: `Uploaded size mismatch: expected ${file.size} bytes but wrote ${uploadResult.sizeBytes} bytes`,
-          };
-        }
-
-        return { success: true };
-      }
-
-      if (!files.writeFile) {
-        return { success: false, error: 'File upload not supported' };
-      }
-
-      const isTextFile = getFileCategory(file.name) === 'text';
-      const content = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = () => reject(reader.error);
-
-        if (isTextFile) {
-          reader.onload = () => resolve(reader.result as string);
-          reader.readAsText(file);
-          return;
-        }
-
-        reader.onload = () => {
-          const dataUrl = reader.result as string;
-          const commaIndex = dataUrl.indexOf(',');
-          resolve(commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl);
-        };
-        reader.readAsDataURL(file);
-      });
-
-      const result = await files.writeFile(filePath, content, {
-        encoding: isTextFile ? 'utf8' : 'base64',
-        expectedSizeBytes: file.size,
-      });
-
-      if (!result.success) {
-        return { success: false, error: 'Upload failed' };
-      }
-
-      if (typeof result.sizeBytes === 'number' && result.sizeBytes !== file.size) {
-        return {
-          success: false,
-          error: `Uploaded size mismatch: expected ${file.size} bytes but wrote ${result.sizeBytes} bytes`,
-        };
-      }
-
+    if (result.success) {
       return { success: true };
-    } catch (error) {
-      return { success: false, error: getFriendlyUploadErrorMessage(error) };
     }
+
+    return result;
   }, [files]);
 
   const handleFileDrop = React.useCallback(async (droppedFiles: File[], targetDir: string) => {
@@ -2443,6 +2376,13 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
     }),
     [openFiles],
   );
+  const activeTextEditorFile = React.useMemo(() => {
+    if (!selectedFile?.path) {
+      return null;
+    }
+
+    return openTextEditorFiles.find((file) => file.path === selectedFile.path) ?? null;
+  }, [openTextEditorFiles, selectedFile?.path]);
   const getEditorDraftForPath = React.useCallback((path: string): string => {
     if (selectedFile?.path === path) {
       return draftContent;
@@ -2862,11 +2802,6 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
     }
     return extensions;
   }, [currentTheme, selectedFile?.path, staticLanguageExtension, dynamicLanguageExtension, wrapLines, isMobile, nudgeEditorSelectionAboveKeyboard]);
-
-  const inactiveEditorExtensions = React.useMemo(
-    () => [createFlexokiCodeMirrorTheme(currentTheme)],
-    [currentTheme],
-  );
 
   const pierreTheme = React.useMemo(
     () => ({ light: lightTheme.metadata.id, dark: darkTheme.metadata.id }),
@@ -3554,125 +3489,110 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
               })}
             </div>
           )}
-          {openTextEditorFiles.length > 0 && !isFullscreen && (
-            <div className={cn('absolute inset-0 z-20', shouldShowTextEditorOverlay ? 'block' : 'hidden')} aria-hidden={!shouldShowTextEditorOverlay}>
-              {openTextEditorFiles.map((file) => {
-                const isActiveTextTab = Boolean(isSelectedTextEditor && selectedFile?.path === file.path);
-                const draftValue = getEditorDraftForPath(file.path);
+          {activeTextEditorFile && shouldShowTextEditorOverlay && (
+            <div className="absolute inset-0 z-20">
+              <div
+                className={cn('relative h-full', shouldMaskEditorForPendingNavigation && 'overflow-hidden')}
+                ref={editorWrapperRef}
+                data-keyboard-avoid="none"
+                style={isMobile ? { height: 'calc(100% - var(--oc-keyboard-inset, 0px))' } : undefined}
+              >
+                <div className={cn('h-full', shouldMaskEditorForPendingNavigation && 'invisible')}>
+                  <CodeMirrorEditor
+                    value={getEditorDraftForPath(activeTextEditorFile.path)}
+                    onChange={(nextValue) => handleEditorDraftChange(activeTextEditorFile.path, nextValue)}
+                    extensions={editorExtensions}
+                    className="h-full"
+                    blockWidgets={blockWidgets}
+                    onViewReady={(view) => {
+                      handleCodeMirrorViewReady(activeTextEditorFile.path, view);
+                    }}
+                    onViewDestroy={() => {
+                      handleCodeMirrorViewDestroy(activeTextEditorFile.path);
+                    }}
+                    enableSearch
+                    searchOpen={isSearchOpen}
+                    onSearchOpenChange={setIsSearchOpen}
+                    highlightLines={lineSelection
+                      ? {
+                        start: Math.min(lineSelection.start, lineSelection.end),
+                        end: Math.max(lineSelection.start, lineSelection.end),
+                      }
+                      : undefined}
+                    lineNumbersConfig={{
+                      domEventHandlers: {
+                        mousedown: (view: EditorView, line: { from: number; to: number }, event: Event) => {
+                          if (!(event instanceof MouseEvent)) {
+                            return false;
+                          }
+                          if (event.button !== 0) {
+                            return false;
+                          }
+                          event.preventDefault();
 
-                return (
-                  <div
-                    key={file.path}
-                    className={cn('absolute inset-0', isActiveTextTab ? 'block' : 'hidden')}
-                    aria-hidden={!isActiveTextTab}
-                  >
-                    <div
-                      className={cn('relative h-full', isActiveTextTab && shouldMaskEditorForPendingNavigation && 'overflow-hidden')}
-                      ref={isActiveTextTab ? editorWrapperRef : undefined}
-                      data-keyboard-avoid="none"
-                      style={isActiveTextTab && isMobile ? { height: 'calc(100% - var(--oc-keyboard-inset, 0px))' } : undefined}
-                    >
-                      <div className={cn('h-full', isActiveTextTab && shouldMaskEditorForPendingNavigation && 'invisible')}>
-                        <CodeMirrorEditor
-                          value={draftValue}
-                          onChange={(nextValue) => handleEditorDraftChange(file.path, nextValue)}
-                          extensions={isActiveTextTab ? editorExtensions : inactiveEditorExtensions}
-                          className="h-full"
-                          blockWidgets={isActiveTextTab ? blockWidgets : undefined}
-                          onViewReady={(view) => {
-                            handleCodeMirrorViewReady(file.path, view);
-                          }}
-                          onViewDestroy={() => {
-                            handleCodeMirrorViewDestroy(file.path);
-                          }}
-                          enableSearch={isActiveTextTab}
-                          searchOpen={isActiveTextTab ? isSearchOpen : false}
-                          onSearchOpenChange={isActiveTextTab ? setIsSearchOpen : undefined}
-                          highlightLines={isActiveTextTab && lineSelection
-                            ? {
-                              start: Math.min(lineSelection.start, lineSelection.end),
-                              end: Math.max(lineSelection.start, lineSelection.end),
-                            }
-                            : undefined}
-                          lineNumbersConfig={isActiveTextTab
-                            ? {
-                              domEventHandlers: {
-                                mousedown: (view: EditorView, line: { from: number; to: number }, event: Event) => {
-                                  if (!(event instanceof MouseEvent)) {
-                                    return false;
-                                  }
-                                  if (event.button !== 0) {
-                                    return false;
-                                  }
-                                  event.preventDefault();
+                          const lineNumber = view.state.doc.lineAt(line.from).number;
 
-                                  const lineNumber = view.state.doc.lineAt(line.from).number;
+                          if (isMobile && lineSelection && !event.shiftKey) {
+                            const start = Math.min(lineSelection.start, lineSelection.end, lineNumber);
+                            const end = Math.max(lineSelection.start, lineSelection.end, lineNumber);
+                            setLineSelection({ start, end });
+                            isSelectingRef.current = false;
+                            selectionStartRef.current = null;
+                            setIsDragging(false);
+                            return true;
+                          }
 
-                                  if (isMobile && lineSelection && !event.shiftKey) {
-                                    const start = Math.min(lineSelection.start, lineSelection.end, lineNumber);
-                                    const end = Math.max(lineSelection.start, lineSelection.end, lineNumber);
-                                    setLineSelection({ start, end });
-                                    isSelectingRef.current = false;
-                                    selectionStartRef.current = null;
-                                    setIsDragging(false);
-                                    return true;
-                                  }
+                          isSelectingRef.current = true;
+                          selectionStartRef.current = lineNumber;
+                          setIsDragging(true);
 
-                                  isSelectingRef.current = true;
-                                  selectionStartRef.current = lineNumber;
-                                  setIsDragging(true);
+                          if (lineSelection && event.shiftKey) {
+                            const start = Math.min(lineSelection.start, lineNumber);
+                            const end = Math.max(lineSelection.end, lineNumber);
+                            setLineSelection({ start, end });
+                          } else {
+                            setLineSelection({ start: lineNumber, end: lineNumber });
+                          }
 
-                                  if (lineSelection && event.shiftKey) {
-                                    const start = Math.min(lineSelection.start, lineNumber);
-                                    const end = Math.max(lineSelection.end, lineNumber);
-                                    setLineSelection({ start, end });
-                                  } else {
-                                    setLineSelection({ start: lineNumber, end: lineNumber });
-                                  }
+                          return true;
+                        },
+                        mouseover: (view: EditorView, line: { from: number; to: number }, event: Event) => {
+                          if (!(event instanceof MouseEvent)) {
+                            return false;
+                          }
+                          if (event.buttons !== 1) {
+                            return false;
+                          }
+                          if (!isSelectingRef.current || selectionStartRef.current === null) {
+                            return false;
+                          }
 
-                                  return true;
-                                },
-                                mouseover: (view: EditorView, line: { from: number; to: number }, event: Event) => {
-                                  if (!(event instanceof MouseEvent)) {
-                                    return false;
-                                  }
-                                  if (event.buttons !== 1) {
-                                    return false;
-                                  }
-                                  if (!isSelectingRef.current || selectionStartRef.current === null) {
-                                    return false;
-                                  }
-
-                                  const lineNumber = view.state.doc.lineAt(line.from).number;
-                                  const start = Math.min(selectionStartRef.current, lineNumber);
-                                  const end = Math.max(selectionStartRef.current, lineNumber);
-                                  setLineSelection({ start, end });
-                                  setIsDragging(true);
-                                  return false;
-                                },
-                                mouseup: () => {
-                                  isSelectingRef.current = false;
-                                  selectionStartRef.current = null;
-                                  setIsDragging(false);
-                                  return false;
-                                },
-                              },
-                            }
-                            : undefined}
-                        />
-                      </div>
-                      {isActiveTextTab && shouldMaskEditorForPendingNavigation && (
-                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-background">
-                          <div className="flex items-center gap-2 typography-ui text-muted-foreground">
-                            <RiLoader4Line className="h-4 w-4 animate-spin" />
-                            Opening file at change...
-                          </div>
-                        </div>
-                      )}
+                          const lineNumber = view.state.doc.lineAt(line.from).number;
+                          const start = Math.min(selectionStartRef.current, lineNumber);
+                          const end = Math.max(selectionStartRef.current, lineNumber);
+                          setLineSelection({ start, end });
+                          setIsDragging(true);
+                          return false;
+                        },
+                        mouseup: () => {
+                          isSelectingRef.current = false;
+                          selectionStartRef.current = null;
+                          setIsDragging(false);
+                          return false;
+                        },
+                      },
+                    }}
+                  />
+                </div>
+                {shouldMaskEditorForPendingNavigation && (
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-background">
+                    <div className="flex items-center gap-2 typography-ui text-muted-foreground">
+                      <RiLoader4Line className="h-4 w-4 animate-spin" />
+                      Opening file at change...
                     </div>
                   </div>
-                );
-              })}
+                )}
+              </div>
             </div>
           )}
           {!selectedFile ? (

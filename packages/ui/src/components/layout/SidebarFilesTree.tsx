@@ -64,12 +64,11 @@ import { useFilesViewShowGitignored } from '@/lib/filesViewShowGitignored';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { triggerFileDownload } from '@/lib/fileDownload';
 import { notifyFileContentInvalidated } from '@/lib/fileContentInvalidation';
+import { uploadFileWithFallback, type UploadAttemptResult, type UploadProgressUpdate } from '@/lib/fileUpload';
 import { cn } from '@/lib/utils';
 import { opencodeClient } from '@/lib/opencode/client';
 import { FileTypeIcon } from '@/components/icons/FileTypeIcon';
 import { getContextFileOpenFailureMessage, validateContextFileOpen } from '@/lib/contextFileOpenGuard';
-import { getFileCategory, isBinaryFile } from '@/lib/fileHelpers';
-import { getFriendlyUploadErrorMessage, getUploadPreflightError } from '@/lib/fileUploadGuards';
 
 type FileNode = {
   name: string;
@@ -90,10 +89,6 @@ type UploadPlaceholder = {
   status: UploadPlaceholderStatus;
   progress: number;
 };
-
-type UploadAttemptResult =
-  | { success: true; sizeBytes?: number }
-  | { success: false; error: string };
 
 const sortNodes = (items: FileNode[]) =>
   items.slice().sort((a, b) => {
@@ -515,6 +510,7 @@ export const SidebarFilesTree: React.FC = () => {
   const [isUploading, setIsUploading] = React.useState(false);
   const [uploadPlaceholders, setUploadPlaceholders] = React.useState<UploadPlaceholder[]>([]);
   const dragCounterRef = React.useRef(0);
+  const failedUploadCleanupTimeoutIdsRef = React.useRef<Set<number>>(new Set());
 
   const [activeDndNode, setActiveDndNode] = React.useState<FileNode | null>(null);
   const [dndDropTargetPath, setDndDropTargetPath] = React.useState<string | null>(null);
@@ -855,117 +851,29 @@ export const SidebarFilesTree: React.FC = () => {
     setUploadPlaceholders((previous) => previous.filter((item) => !idSet.has(item.id)));
   }, []);
 
+  React.useEffect(() => {
+    const timeoutIds = failedUploadCleanupTimeoutIdsRef.current;
+
+    return () => {
+      for (const timeoutId of timeoutIds) {
+        window.clearTimeout(timeoutId);
+      }
+      timeoutIds.clear();
+    };
+  }, []);
+
   const uploadFile = React.useCallback(async (
     file: File,
     targetDir: string,
-    onProgress?: (update: { phase: 'reading' | 'writing'; progress: number }) => void
+    onProgress?: (update: UploadProgressUpdate) => void
   ): Promise<UploadAttemptResult> => {
-    if (!files.uploadFile && !files.writeFile) {
-      return { success: false, error: 'File upload not supported' };
-    }
-
-    const filePath = normalizePath(`${targetDir}/${file.name}`);
-    const isBinaryUpload = isBinaryFile(file.name);
-    const preflightError = getUploadPreflightError({
-      fileName: file.name,
-      sizeBytes: file.size,
-      isBinary: isBinaryUpload,
-      supportsStreamingUpload: Boolean(files.uploadFile),
+    return uploadFileWithFallback({
+      files,
+      file,
+      targetDir,
+      normalizePath,
+      onProgress,
     });
-
-    if (preflightError) {
-      return { success: false, error: preflightError };
-    }
-
-    try {
-      if (files.uploadFile) {
-        const uploadResult = await files.uploadFile(filePath, file, {
-          expectedSizeBytes: file.size,
-          onProgress: ({ loadedBytes, totalBytes }) => {
-            const denominator = totalBytes > 0 ? totalBytes : file.size;
-            const progress = denominator > 0
-              ? Math.max(0, Math.min(100, Math.round((loadedBytes / denominator) * 100)))
-              : 0;
-            onProgress?.({ phase: progress >= 100 ? 'writing' : 'reading', progress });
-          },
-        });
-
-        onProgress?.({ phase: 'writing', progress: 100 });
-
-        if (!uploadResult.success) {
-          return { success: false, error: 'Upload failed' };
-        }
-
-        if (typeof uploadResult.sizeBytes === 'number' && uploadResult.sizeBytes !== file.size) {
-          return {
-            success: false,
-            error: `Uploaded size mismatch: expected ${file.size} bytes but wrote ${uploadResult.sizeBytes} bytes`,
-          };
-        }
-
-        return { success: true, sizeBytes: uploadResult.sizeBytes };
-      }
-
-      if (!files.writeFile) {
-        return { success: false, error: 'File upload not supported' };
-      }
-
-      const category = getFileCategory(file.name);
-      const isTextFile = category === 'text';
-
-      const content = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = () => reject(reader.error);
-        reader.onprogress = (event) => {
-          if (!event.lengthComputable || event.total <= 0) {
-            return;
-          }
-
-          const progress = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)));
-          onProgress?.({ phase: 'reading', progress });
-        };
-
-        reader.onload = () => {
-          onProgress?.({ phase: 'reading', progress: 100 });
-          resolve(reader.result as string);
-        };
-
-        if (isTextFile) {
-          reader.readAsText(file);
-          return;
-        }
-
-        // Fallback path for runtimes without streaming upload.
-        // Read as data URL then pass only raw base64 payload.
-        reader.onload = () => {
-          onProgress?.({ phase: 'reading', progress: 100 });
-          const dataUrl = reader.result as string;
-          const commaIndex = dataUrl.indexOf(',');
-          resolve(commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl);
-        };
-        reader.readAsDataURL(file);
-      });
-
-      onProgress?.({ phase: 'writing', progress: 100 });
-      const result = await files.writeFile(filePath, content, {
-        encoding: isTextFile ? 'utf8' : 'base64',
-        expectedSizeBytes: file.size,
-      });
-      if (!result.success) {
-        return { success: false, error: 'Upload failed' };
-      }
-
-      if (typeof result.sizeBytes === 'number' && result.sizeBytes !== file.size) {
-        return {
-          success: false,
-          error: `Uploaded size mismatch: expected ${file.size} bytes but wrote ${result.sizeBytes} bytes`,
-        };
-      }
-
-      return { success: true, sizeBytes: result.sizeBytes };
-    } catch (error) {
-      return { success: false, error: getFriendlyUploadErrorMessage(error) };
-    }
   }, [files]);
 
   const handleFileDrop = React.useCallback(async (droppedFiles: File[], targetDir: string) => {
@@ -978,7 +886,12 @@ export const SidebarFilesTree: React.FC = () => {
       return;
     }
 
-    await ensurePathVisible(normalizedTargetDir);
+    try {
+      await ensurePathVisible(normalizedTargetDir);
+    } catch {
+      toast.error('Failed to prepare upload target');
+      return;
+    }
 
     const startedAt = Date.now();
     const placeholders: UploadPlaceholder[] = droppedFiles.map((file, index) => {
@@ -1003,56 +916,68 @@ export const SidebarFilesTree: React.FC = () => {
     const successfulPlaceholderIds: string[] = [];
     const failedPlaceholderIds: string[] = [];
     let firstFailureMessage: string | null = null;
+    let unexpectedError = false;
 
-    for (const [index, file] of droppedFiles.entries()) {
-      const placeholder = placeholders[index];
-      if (!placeholder) {
-        continue;
-      }
-
-      updateUploadPlaceholder(placeholder.id, { status: 'reading', progress: 0 });
-      const result = await uploadFile(file, normalizedTargetDir, ({ phase, progress }) => {
-        updateUploadPlaceholder(placeholder.id, {
-          status: phase === 'reading' ? 'reading' : 'writing',
-          progress,
-        });
-      });
-
-      if (result.success) {
-        successCount += 1;
-        uploadedPaths.push(placeholder.path);
-        successfulPlaceholderIds.push(placeholder.id);
-      } else {
-        failCount += 1;
-        if (!firstFailureMessage) {
-          firstFailureMessage = result.error;
+    try {
+      for (const [index, file] of droppedFiles.entries()) {
+        const placeholder = placeholders[index];
+        if (!placeholder) {
+          continue;
         }
-        failedPlaceholderIds.push(placeholder.id);
-        updateUploadPlaceholder(placeholder.id, { status: 'error' });
+
+        updateUploadPlaceholder(placeholder.id, { status: 'reading', progress: 0 });
+        const result = await uploadFile(file, normalizedTargetDir, ({ phase, progress }) => {
+          updateUploadPlaceholder(placeholder.id, {
+            status: phase === 'reading' ? 'reading' : 'writing',
+            progress,
+          });
+        });
+
+        if (result.success) {
+          successCount += 1;
+          uploadedPaths.push(placeholder.path);
+          successfulPlaceholderIds.push(placeholder.id);
+        } else {
+          failCount += 1;
+          if (!firstFailureMessage) {
+            firstFailureMessage = result.error;
+          }
+          failedPlaceholderIds.push(placeholder.id);
+          updateUploadPlaceholder(placeholder.id, { status: 'error' });
+        }
       }
-    }
 
-    setIsUploading(false);
+      if (successCount > 0) {
+        notifyFileContentInvalidated(uploadedPaths);
+        await refreshRoot();
+        if (successCount === 1 && failCount === 0) {
+          toast.success('File uploaded successfully');
+        } else if (failCount === 0) {
+          toast.success(`${successCount} files uploaded successfully`);
+        } else {
+          toast.warning(firstFailureMessage ?? `${successCount} uploaded, ${failCount} failed`);
+        }
+      } else if (failCount > 0) {
+        toast.error(firstFailureMessage ?? `Failed to upload ${failCount} file${failCount === 1 ? '' : 's'}`);
+      }
+    } catch {
+      unexpectedError = true;
+      toast.error('An unexpected error occurred while uploading files');
+    } finally {
+      setIsUploading(false);
 
-    if (successCount > 0) {
-      notifyFileContentInvalidated(uploadedPaths);
-      await refreshRoot();
-      if (successCount === 1 && failCount === 0) {
-        toast.success('File uploaded successfully');
-      } else if (failCount === 0) {
-        toast.success(`${successCount} files uploaded successfully`);
+      if (unexpectedError) {
+        removeUploadPlaceholders(placeholders.map((placeholder) => placeholder.id));
       } else {
-        toast.warning(firstFailureMessage ?? `${successCount} uploaded, ${failCount} failed`);
+        removeUploadPlaceholders(successfulPlaceholderIds);
+        if (failedPlaceholderIds.length > 0) {
+          const timeoutId = window.setTimeout(() => {
+            removeUploadPlaceholders(failedPlaceholderIds);
+            failedUploadCleanupTimeoutIdsRef.current.delete(timeoutId);
+          }, 2500);
+          failedUploadCleanupTimeoutIdsRef.current.add(timeoutId);
+        }
       }
-    } else if (failCount > 0) {
-      toast.error(firstFailureMessage ?? `Failed to upload ${failCount} file${failCount === 1 ? '' : 's'}`);
-    }
-
-    removeUploadPlaceholders(successfulPlaceholderIds);
-    if (failedPlaceholderIds.length > 0) {
-      window.setTimeout(() => {
-        removeUploadPlaceholders(failedPlaceholderIds);
-      }, 2500);
     }
   }, [ensurePathVisible, files.uploadFile, files.writeFile, refreshRoot, removeUploadPlaceholders, updateUploadPlaceholder, uploadFile]);
 
