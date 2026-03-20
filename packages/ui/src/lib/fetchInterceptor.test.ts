@@ -1,27 +1,30 @@
 import { describe, expect, it, beforeEach, afterEach } from 'bun:test';
 
 import { SESSION_EXPIRED_EVENT } from './authEvents';
-
-// Reset module-level interceptorInstalled flag between tests by re-importing
-// the module fresh each time via dynamic import with a cache-busting search
-// param isn't possible with Bun's native ESM. Instead we test the interceptor
-// behavior by patching window.fetch directly and verifying event dispatch.
+import { installFetchInterceptor, resetFetchInterceptorForTests } from './fetchInterceptor';
 
 const makeResponse = (status: number): Response =>
   new Response(null, { status }) as Response;
 
 describe('installFetchInterceptor', () => {
   let originalFetch: typeof fetch;
+  let originalWindow: typeof globalThis | undefined;
+  let originalDispatchEvent: typeof globalThis.dispatchEvent;
   let dispatchedEvents: string[];
+  let fetchCalls: Array<RequestInfo | URL>;
 
   beforeEach(() => {
     originalFetch = globalThis.fetch;
+    originalWindow = (globalThis as typeof globalThis & { window?: typeof globalThis }).window;
+    originalDispatchEvent = globalThis.dispatchEvent;
     dispatchedEvents = [];
-    globalThis.addEventListener = (type: string) => {
-      // captured by the test via dispatchEvent spy
-      void type;
-    };
-    globalThis.removeEventListener = () => {};
+    fetchCalls = [];
+    resetFetchInterceptorForTests();
+    (globalThis as typeof globalThis & { window?: typeof globalThis }).window = globalThis;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      fetchCalls.push(input);
+      return makeResponse(200);
+    }) as typeof fetch;
     globalThis.dispatchEvent = (event: Event) => {
       dispatchedEvents.push(event.type);
       return true;
@@ -30,60 +33,61 @@ describe('installFetchInterceptor', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    if (originalWindow === undefined) {
+      delete (globalThis as typeof globalThis & { window?: typeof globalThis }).window;
+    } else {
+      (globalThis as typeof globalThis & { window?: typeof globalThis }).window = originalWindow;
+    }
+    globalThis.dispatchEvent = originalDispatchEvent;
   });
 
   it('dispatches SESSION_EXPIRED_EVENT on 401 from /api/ path', async () => {
-    globalThis.fetch = async () => makeResponse(401);
-    globalThis.dispatchEvent = (event: Event) => {
-      dispatchedEvents.push(event.type);
-      return true;
-    };
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      fetchCalls.push(input);
+      return makeResponse(401);
+    }) as typeof fetch;
+    installFetchInterceptor();
 
-    // Simulate what the interceptor does inline (avoids module cache issues)
     const response = await globalThis.fetch('/api/some-endpoint');
-    if (response.status === 401) {
-      const pathname = '/api/some-endpoint';
-      if (pathname.startsWith('/api/')) {
-        globalThis.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
-      }
-    }
 
+    expect(response.status).toBe(401);
+    expect(fetchCalls).toEqual(['/api/some-endpoint']);
     expect(dispatchedEvents).toContain(SESSION_EXPIRED_EVENT);
   });
 
   it('does NOT dispatch SESSION_EXPIRED_EVENT on 401 from non-/api/ path', async () => {
-    globalThis.fetch = async () => makeResponse(401);
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      fetchCalls.push(input);
+      return makeResponse(401);
+    }) as typeof fetch;
+    installFetchInterceptor();
 
     const response = await globalThis.fetch('/auth/session');
-    if (response.status === 401) {
-      const pathname = '/auth/session';
-      if (pathname.startsWith('/api/')) {
-        globalThis.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
-      }
-    }
 
+    expect(response.status).toBe(401);
+    expect(fetchCalls).toEqual(['/auth/session']);
     expect(dispatchedEvents).not.toContain(SESSION_EXPIRED_EVENT);
   });
 
   it('does NOT dispatch SESSION_EXPIRED_EVENT on 200 from /api/ path', async () => {
-    globalThis.fetch = async () => makeResponse(200);
+    installFetchInterceptor();
 
     const response = await globalThis.fetch('/api/some-endpoint');
-    if (response.status === 401) {
-      globalThis.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
-    }
 
+    expect(response.status).toBe(200);
     expect(dispatchedEvents).toHaveLength(0);
   });
 
   it('does NOT dispatch SESSION_EXPIRED_EVENT on 403 from /api/ path', async () => {
-    globalThis.fetch = async () => makeResponse(403);
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      fetchCalls.push(input);
+      return makeResponse(403);
+    }) as typeof fetch;
+    installFetchInterceptor();
 
     const response = await globalThis.fetch('/api/some-endpoint');
-    if (response.status === 401) {
-      globalThis.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
-    }
 
+    expect(response.status).toBe(403);
     expect(dispatchedEvents).toHaveLength(0);
   });
 });
@@ -127,7 +131,7 @@ describe('installFetchInterceptor pathname extraction', () => {
     expect(extractPathname(new Request('http://localhost/api/sessions'))).toBe('/api/sessions');
   });
 
-  it('returns empty string for malformed URL', () => {
+  it('treats non-absolute string as relative pathname', () => {
     expect(extractPathname('not-a-url')).toBe('not-a-url');
   });
 

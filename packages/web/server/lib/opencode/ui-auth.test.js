@@ -1,16 +1,25 @@
-import { describe, expect, it, beforeAll } from 'bun:test';
+import { afterAll, describe, expect, it } from 'bun:test';
 
 import { SignJWT } from 'jose';
 
 // Must be set before createUiAuth is called so getOrCreateJwtSecret() picks it up
 const TEST_JWT_SECRET = 'test-secret-that-is-long-enough-for-hs256-alg-ok';
+const PREVIOUS_JWT_SECRET = process.env.OPENCODE_JWT_SECRET;
 process.env.OPENCODE_JWT_SECRET = TEST_JWT_SECRET;
 
 const { createUiAuth } = await import('./ui-auth.js');
 
 const SECRET_BYTES = new TextEncoder().encode(TEST_JWT_SECRET);
 
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+
+afterAll(() => {
+  if (PREVIOUS_JWT_SECRET === undefined) {
+    delete process.env.OPENCODE_JWT_SECRET;
+  } else {
+    process.env.OPENCODE_JWT_SECRET = PREVIOUS_JWT_SECRET;
+  }
+});
 
 /**
  * Create a JWT that mimics what the server issues, but with explicit iat/exp
@@ -61,8 +70,16 @@ const createMockRes = () => {
 
 describe('createUiAuth', () => {
   describe('session TTL', () => {
-    it('uses a 30-day session TTL by default', () => {
-      expect(SESSION_TTL_MS).toBe(30 * 24 * 60 * 60 * 1000);
+    it('uses a 30-day session TTL by default', async () => {
+      const uiAuth = createUiAuth({ password: 'correct-password' });
+      const req = { ...createMockReq(null), body: { password: 'correct-password' } };
+      const res = createMockRes();
+
+      await uiAuth.handleSessionCreate(req, res);
+
+      expect(res._body?.authenticated).toBe(true);
+      expect(res._headers['Set-Cookie']).toContain('oc_ui_session=');
+      expect(res._headers['Set-Cookie']).toContain(`Max-Age=${SESSION_TTL_SECONDS}`);
     });
   });
 

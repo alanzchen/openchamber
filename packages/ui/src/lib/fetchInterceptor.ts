@@ -48,3 +48,8 @@ export const installFetchInterceptor = (): void => {
     return response;
   };
 };
+
+/** @internal Test helper for resetting module state between unit tests. */
+export const resetFetchInterceptorForTests = (): void => {
+  interceptorInstalled = false;
+};
