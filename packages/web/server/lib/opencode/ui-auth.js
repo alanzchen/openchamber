@@ -5,7 +5,7 @@ import path from 'path';
 import os from 'os';
 
 const SESSION_COOKIE_NAME = 'oc_ui_session';
-const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
 const RATE_LIMIT_MAX_ATTEMPTS = Number(process.env.OPENCHAMBER_RATE_LIMIT_MAX_ATTEMPTS) || 10;
@@ -402,16 +402,28 @@ export const createUiAuth = ({
     }
   };
 
-  const isSessionValid = async (token) => {
+  const verifySession = async (token) => {
     if (!token) {
-      return false;
+      return null;
     }
     try {
-      await jwtVerify(token, JWT_SECRET);
-      return true;
+      const { payload } = await jwtVerify(token, JWT_SECRET);
+      return payload;
     } catch {
+      return null;
+    }
+  };
+
+  const shouldRenewSession = (payload) => {
+    if (!payload?.exp || !payload?.iat) {
       return false;
     }
+    const nowSecs = Math.floor(Date.now() / 1000);
+    const elapsed = nowSecs - payload.iat;
+    const total = payload.exp - payload.iat;
+    // Renew when more than half of the TTL has elapsed so active sessions
+    // stay alive without writing a new cookie on every single request.
+    return elapsed > total / 2;
   };
 
   const issueSession = async (req, res) => {
@@ -441,7 +453,11 @@ export const createUiAuth = ({
       return next();
     }
     const token = getTokenFromRequest(req);
-    if (await isSessionValid(token)) {
+    const payload = await verifySession(token);
+    if (payload) {
+      if (shouldRenewSession(payload)) {
+        await issueSession(req, res);
+      }
       return next();
     }
     clearSessionCookie(req, res);
@@ -450,7 +466,11 @@ export const createUiAuth = ({
 
   const handleSessionStatus = async (req, res) => {
     const token = getTokenFromRequest(req);
-    if (await isSessionValid(token)) {
+    const payload = await verifySession(token);
+    if (payload) {
+      if (shouldRenewSession(payload)) {
+        await issueSession(req, res);
+      }
       res.json({ authenticated: true });
       return;
     }
@@ -503,7 +523,7 @@ export const createUiAuth = ({
     handleSessionCreate,
     ensureSessionToken: async (req, _res) => {
       const token = getTokenFromRequest(req);
-      return (await isSessionValid(token)) ? token : null;
+      return (await verifySession(token)) ? token : null;
     },
     dispose,
   };

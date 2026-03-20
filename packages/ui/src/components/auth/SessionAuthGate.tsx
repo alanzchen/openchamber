@@ -7,6 +7,7 @@ import { syncDesktopSettings, initializeAppearancePreferences } from '@/lib/pers
 import { applyPersistedDirectoryPreferences } from '@/lib/directoryPersistence';
 import { DesktopHostSwitcherInline } from '@/components/desktop/DesktopHostSwitcher';
 import { OpenChamberLogo } from '@/components/ui/OpenChamberLogo';
+import { SESSION_EXPIRED_EVENT } from '@/lib/authEvents';
 
 const STATUS_CHECK_ENDPOINT = '/auth/session';
 
@@ -125,13 +126,6 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({ children }) =>
       return;
     }
 
-    // 检查 cookie 是否存在
-    const cookies = document.cookie;
-    const hasAccessToken = cookies.includes('oc_ui_session=');
-    const hasRefreshToken = cookies.includes('oc_ui_refresh=');
-    console.log('[Frontend Auth] Cookies check - access:', hasAccessToken, 'refresh:', hasRefreshToken);
-    console.log('[Frontend Auth] All cookies:', cookies.split(';').map(c => c.trim().split('=')[0]));
-
     setState((prev) => (prev === 'authenticated' ? prev : 'pending'));
     try {
       const response = await fetchSessionStatus();
@@ -192,6 +186,19 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({ children }) =>
   }, [checkStatus, skipAuth]);
 
   React.useEffect(() => {
+    if (skipAuth) {
+      return;
+    }
+    const handleSessionExpired = () => {
+      // Only transition if currently authenticated; ignore stale 401s that
+      // arrive during login/pending/error flows where locking is irrelevant.
+      setState((prev) => (prev === 'authenticated' ? 'locked' : prev));
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+  }, [skipAuth]);
+
+  React.useEffect(() => {
     if (!skipAuth && state === 'locked') {
       hasResyncedRef.current = false;
     }
@@ -234,12 +241,6 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({ children }) =>
       const response = await submitPassword(password);
       if (response.ok) {
         console.log('[Frontend Auth] Login successful');
-        // 检查登录后 cookie 是否被设置
-        const cookies = document.cookie;
-        const hasAccessToken = cookies.includes('oc_ui_session=');
-        const hasRefreshToken = cookies.includes('oc_ui_refresh=');
-        console.log('[Frontend Auth] After login - access:', hasAccessToken, 'refresh:', hasRefreshToken);
-        console.log('[Frontend Auth] All cookies after login:', cookies.split(';').map(c => c.trim().split('=')[0]).filter(Boolean));
         setPassword('');
         setIsTunnelLocked(false);
         setState('authenticated');
