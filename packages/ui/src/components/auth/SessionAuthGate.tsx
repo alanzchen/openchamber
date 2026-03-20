@@ -7,6 +7,7 @@ import { syncDesktopSettings, initializeAppearancePreferences } from '@/lib/pers
 import { applyPersistedDirectoryPreferences } from '@/lib/directoryPersistence';
 import { DesktopHostSwitcherInline } from '@/components/desktop/DesktopHostSwitcher';
 import { OpenChamberLogo } from '@/components/ui/OpenChamberLogo';
+import { SESSION_EXPIRED_EVENT } from '@/lib/authEvents';
 
 const STATUS_CHECK_ENDPOINT = '/auth/session';
 
@@ -183,6 +184,19 @@ export const SessionAuthGate: React.FC<SessionAuthGateProps> = ({ children }) =>
     }
     void checkStatus();
   }, [checkStatus, skipAuth]);
+
+  React.useEffect(() => {
+    if (skipAuth) {
+      return;
+    }
+    const handleSessionExpired = () => {
+      // Only transition if currently authenticated; ignore stale 401s that
+      // arrive during login/pending/error flows where locking is irrelevant.
+      setState((prev) => (prev === 'authenticated' ? 'locked' : prev));
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+  }, [skipAuth]);
 
   React.useEffect(() => {
     if (!skipAuth && state === 'locked') {

@@ -421,6 +421,8 @@ export const createUiAuth = ({
     const nowSecs = Math.floor(Date.now() / 1000);
     const elapsed = nowSecs - payload.iat;
     const total = payload.exp - payload.iat;
+    // Renew when more than half of the TTL has elapsed so active sessions
+    // stay alive without writing a new cookie on every single request.
     return elapsed > total / 2;
   };
 

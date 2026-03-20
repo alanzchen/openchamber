@@ -13,6 +13,9 @@ import { applyPersistedDirectoryPreferences } from './lib/directoryPersistence'
 import { startTypographyWatcher } from './lib/typographyWatcher'
 import { startModelPrefsAutoSave } from './lib/modelPrefsAutoSave'
 import type { RuntimeAPIs } from './lib/api/types'
+import { installFetchInterceptor } from './lib/fetchInterceptor'
+
+installFetchInterceptor()
 
 declare global {
   interface Window {
